@@ -1,0 +1,68 @@
+{
+  "name": "charsen/moo-monitor-laravel",
+  "description": "Laravel runtime error & slow SQL monitoring SDK for moo-scaffold-cloud",
+  "keywords": [
+    "mooeen",
+    "monitor",
+    "laravel",
+    "error-tracking",
+    "slow-query"
+  ],
+  "type": "library",
+  "homepage": "https://gitee.com/charsen/moo-monitor-laravel",
+  "license": "MIT",
+  "authors": [
+    {
+      "name": "Charsen",
+      "email": "780537@gmail.com",
+      "homepage": "https://www.charsen.com",
+      "role": "Developer"
+    }
+  ],
+  "support": {
+    "issues": "https://gitee.com/charsen/moo-monitor-laravel/issues",
+    "source": "https://gitee.com/charsen/moo-monitor-laravel",
+    "docs": "https://gitee.com/charsen/moo-monitor-laravel/blob/master/README.md"
+  },
+  "require": {
+    "php": "^8.2",
+    "laravel/framework": "^12.0",
+    "symfony/yaml": "^7.0"
+  },
+  "require-dev": {
+    "roave/security-advisories": "dev-latest",
+    "laravel/pint": "^1.13",
+    "pestphp/pest": "^3.0",
+    "pestphp/pest-plugin-laravel": "^3.0",
+    "orchestra/testbench": "^10.0"
+  },
+  "autoload": {
+    "psr-4": {
+      "Mooeen\\Monitor\\": "src"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "Mooeen\\Monitor\\Tests\\": "tests"
+    }
+  },
+  "scripts": {
+    "test": "./vendor/bin/pest",
+    "test:filter": "./vendor/bin/pest --filter"
+  },
+  "config": {
+    "allow-plugins": {
+      "pestphp/pest-plugin": true
+    }
+  },
+  "extra": {
+    "branch-alias": {
+      "dev-master": "0.1.x-dev"
+    },
+    "laravel": {
+      "providers": [
+        "Mooeen\\Monitor\\MonitorProvider"
+      ]
+    }
+  }
+}
