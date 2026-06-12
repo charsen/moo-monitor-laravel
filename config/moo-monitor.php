@@ -69,8 +69,11 @@ return [
         // 同一 hash 每天最多写盘次数;<=0 不限制
         'daily_cap' => (int) env('MOO_MONITOR_SQL_SLOW_DAILY_CAP', 10),
 
-        // SQL 子串命中即跳过(操作日志 / 迁移表等高频噪音)
-        'skip_patterns' => [],
+        // SQL 子串命中即跳过(操作日志 / 迁移表等高频噪音)。默认避开操作日志写入 + 迁移表查询,同 3.8.15
+        'skip_patterns' => [
+            'insert into `system_operation_logs`',
+            'select * from `migrations`',
+        ],
 
         // open 数缓存 TTL(秒)
         'cache_ttl' => (int) env('MOO_MONITOR_SQL_SLOW_CACHE_TTL', 30),
