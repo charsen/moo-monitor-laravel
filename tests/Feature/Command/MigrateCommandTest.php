@@ -136,6 +136,19 @@ it('.env 残留旧 SCAFFOLD_* 变量 → 列出改名对照', function () {
         ->assertExitCode(0);
 });
 
+it('git-sync 时代的 .gitkeep 残留不挡旧目录清理(重跑可补清空壳)', function () {
+    migrateCmd_seedOld('runtimes', 'open', 'aaaaaaaaaaaa', '2026-06-01T00:00:00+00:00');
+    // 模拟老宿主:bucket 目录里有 .gitkeep(曾入 git 占位)
+    @mkdir(base_path('scaffold/runtimes/resolved'), 0755, true);
+    file_put_contents(base_path('scaffold/runtimes/.gitkeep'), '');
+    file_put_contents(base_path('scaffold/runtimes/resolved/.gitkeep'), '');
+
+    $this->artisan('moo:monitor:migrate')->assertExitCode(0);
+
+    expect(is_file(storage_path('moo-monitor/runtimes/open/aaaaaaaaaaaa.yaml')))->toBeTrue()
+        ->and(is_dir(base_path('scaffold/runtimes')))->toBeFalse(); // .gitkeep 不挡删
+});
+
 it('重复跑第二次 → 幂等无动作', function () {
     migrateCmd_seedOld('runtimes', 'open', 'aaaaaaaaaaaa', '2026-06-01T00:00:00+00:00');
 
