@@ -255,7 +255,7 @@ class MigrateCommand extends Command
         }
         $gitignore = $dir . '/.gitignore';
         if (! is_file($gitignore)) {
-            @file_put_contents($gitignore, "*\n!.gitignore\n");
+            @file_put_contents($gitignore, "*\n");
         }
     }
 
