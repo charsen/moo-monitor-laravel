@@ -119,6 +119,16 @@ class MigrateCommand extends Command
         }
 
         if ($moved === 0 && $skipped === 0) {
+            // 没有 yaml 可迁,但旧布局空壳(仅 .gitkeep / .gitignore 残留)也该清 —— 支持重跑补清
+            if (! $dryRun) {
+                $this->removeDirIfEmpty($from);
+                if (! is_dir($from)) {
+                    $this->line("[{$label}] 旧目录空壳已清理:" . $this->shortPath($from));
+
+                    return true;
+                }
+            }
+
             return false;
         }
 
@@ -249,13 +259,18 @@ class MigrateCommand extends Command
         }
     }
 
-    /** 清空后的旧目录(含空 bucket 子目录)能删则删;删不掉不报错。 */
+    /**
+     * 清空后的旧目录(含空 bucket 子目录)能删则删;删不掉不报错。
+     * git-sync 时代残留的 .gitkeep / .gitignore 一并清(只认这两个名字,不碰其他文件)。
+     */
     private function removeDirIfEmpty(string $dir): void
     {
-        foreach (['open', 'resolved', 'deleted'] as $bucket) {
-            @rmdir($dir . '/' . $bucket);
+        foreach (['open', 'resolved', 'deleted', ''] as $bucket) {
+            $d = $bucket === '' ? $dir : $dir . '/' . $bucket;
+            @unlink($d . '/.gitkeep');
+            @unlink($d . '/.gitignore');
+            @rmdir($d);
         }
-        @rmdir($dir);
     }
 
     private function readJson(string $file): array
