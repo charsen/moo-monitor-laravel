@@ -165,6 +165,7 @@ class MigrateCommand extends Command
             $this->ensureDirWithGitignore(dirname($new));
             @file_put_contents($new, json_encode($merged, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
             @unlink($old);
+            @unlink($old . '.lock'); // writeState 的 flock 锁文件,跟游标一起清
             $this->removeDirIfEmpty(dirname($old));
         }
 
