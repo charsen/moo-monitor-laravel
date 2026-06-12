@@ -4,7 +4,7 @@ use Symfony\Component\Yaml\Yaml;
 
 /**
  * moo:monitor:migrate —— scaffold ≤3.8 旧布局(base_path('scaffold/...') + storage/app/scaffold 游标)
- * 平移到新布局(storage/moo-monitor/...)。锁:平移、同 hash 新者胜、游标合并取大、幂等、.env 体检。
+ * 平移到新布局(storage/moo-monitor/...)。锁:平移、同 hash 新者胜、游标合并取小、幂等、.env 体检。
  */
 beforeEach(function () {
     $this->origStorage = storage_path();
@@ -91,24 +91,28 @@ it('同 hash 两边都有 → meta.updated_at 新者胜', function () {
         ->and(Yaml::parseFile($newDir . '/dddddddddddd.yaml')['meta']['updated_at'])->toBe('2026-06-11T00:00:00+00:00');
 });
 
-it('游标平移:旧 storage/app/scaffold/cloud-sync.json → 新位置,逐类型取较新水位', function () {
+it('游标平移:旧 storage/app/scaffold/cloud-sync.json → 新位置,逐类型取较旧水位', function () {
+    // 取小才保守:游标偏旧只是多推一遍(云端幂等),偏新会让旧布局未推记录被增量永久跳过
     $oldDir = storage_path('app/scaffold');
     @mkdir($oldDir, 0755, true);
     file_put_contents($oldDir . '/cloud-sync.json', json_encode([
-        'runtimes' => '2026-06-10T00:00:00+00:00', // 旧的较新 → 采用
-        'slow_sql' => '2026-06-01T00:00:00+00:00', // 旧的较旧 → 保留新位置的
+        'runtimes' => '2026-06-01T00:00:00+00:00', // 旧的较旧 → 采用
+        'slow_sql' => '2026-06-10T00:00:00+00:00', // 旧的较新 → 保留新位置的
+        'legacy'   => '2026-06-02T00:00:00+00:00', // 新位置没有 → 平移采用
     ]));
     $newDir = storage_path('moo-monitor');
     @mkdir($newDir, 0755, true);
     file_put_contents($newDir . '/cloud-sync.json', json_encode([
-        'slow_sql' => '2026-06-05T00:00:00+00:00',
+        'runtimes' => '2026-06-05T00:00:00+00:00',
+        'slow_sql' => '2026-06-03T00:00:00+00:00',
     ]));
 
     $this->artisan('moo:monitor:migrate')->assertExitCode(0);
 
     $state = json_decode((string) file_get_contents($newDir . '/cloud-sync.json'), true);
-    expect($state['runtimes'])->toBe('2026-06-10T00:00:00+00:00')
-        ->and($state['slow_sql'])->toBe('2026-06-05T00:00:00+00:00')
+    expect($state['runtimes'])->toBe('2026-06-01T00:00:00+00:00')
+        ->and($state['slow_sql'])->toBe('2026-06-03T00:00:00+00:00')
+        ->and($state['legacy'])->toBe('2026-06-02T00:00:00+00:00')
         ->and(is_file($oldDir . '/cloud-sync.json'))->toBeFalse(); // 旧游标已删
 });
 

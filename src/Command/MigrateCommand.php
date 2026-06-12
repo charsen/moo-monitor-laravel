@@ -9,7 +9,7 @@
  *   1. 旧 YAML 平移:base_path('scaffold/{runtimes,sql-slows}') 三桶 → storage/moo-monitor/ 对应桶;
  *      同 hash 已存在时按 meta.updated_at 新者胜,旧者丢弃。
  *   2. 推送游标平移:storage/app/scaffold/cloud-sync.json → storage/moo-monitor/cloud-sync.json;
- *      两边都有时逐类型取较新水位合并(游标偏旧只会多推,幂等无害;偏新才会漏)。
+ *      两边都有时逐类型取较旧水位合并(游标偏旧只会多推,云端幂等无害;偏新会让旧布局未推记录被增量跳过)。
  *   3. .env 体检:列出仍残留的 SCAFFOLD_RUNTIME/SQL_SLOW/CLOUD 变量与新名对照(只提示,不改文件)。
  */
 
@@ -161,12 +161,17 @@ class MigrateCommand extends Command
         $oldState = $this->readJson($old);
         $newState = is_file($new) ? $this->readJson($new) : [];
 
-        // 逐类型取较新水位:游标偏旧只是多推一遍(云端幂等),偏新才会漏 —— 永远保守取大。
+        // 逐类型取较旧水位:游标偏旧只是多推一遍(云端幂等),偏新才会漏 —— 永远保守取小。
+        // 典型场景:升级后新布局已先推送过一次(新游标 ≈ now),旧目录里 updated_at 落在
+        // (旧游标, 新游标) 区间的未推送记录若按"取大"合并,会被增量推送永久跳过。
         $merged = $newState;
         foreach ($oldState as $type => $cursor) {
-            $oldEpoch = $this->epoch((string) $cursor);
-            $newEpoch = $this->epoch((string) ($newState[$type] ?? ''));
-            if ($oldEpoch > $newEpoch) {
+            if (! array_key_exists($type, $newState)) {
+                $merged[$type] = $cursor;
+
+                continue;
+            }
+            if ($this->epoch((string) $cursor) < $this->epoch((string) $newState[$type])) {
                 $merged[$type] = $cursor;
             }
         }
