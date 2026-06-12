@@ -107,10 +107,10 @@ trait ManagesBucketedRecords
             }
         }
         // storage/ 下的新顶层目录不被 Laravel 默认 .gitignore 覆盖 —— 首次建目录时落一个
-        // 自我屏蔽的 .gitignore(* + !.gitignore),数据与宿主 git 彻底解耦,宿主零操作。
+        // 自我屏蔽的 .gitignore(纯 `*`,连自身一起屏蔽):目录全程不进宿主 git,status 零噪音。
         $gitignore = $this->basePath . '/.gitignore';
         if (! is_file($gitignore)) {
-            @file_put_contents($gitignore, "*\n!.gitignore\n");
+            @file_put_contents($gitignore, "*\n");
         }
     }
 

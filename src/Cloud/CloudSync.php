@@ -304,10 +304,10 @@ class CloudSync
         if (! is_dir($dir)) {
             @mkdir($dir, 0755, true);
         }
-        // 与 recorder 同策略:storage/ 下新目录自带自我屏蔽 .gitignore(游标文件不入宿主 git)。
+        // 与 recorder 同策略:纯 `*` 的 .gitignore 连自身一起屏蔽,目录在宿主 git status 里零噪音。
         $gitignore = $dir . '/.gitignore';
         if (! is_file($gitignore)) {
-            @file_put_contents($gitignore, "*\n!.gitignore\n");
+            @file_put_contents($gitignore, "*\n");
         }
 
         // flock 串行化整个 read-modify-write:并发的两个 push(不同 --type / 重叠调度)否则会
