@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Mooeen\Monitor\Recorder;
 
 use Illuminate\Http\Request;
+use Mooeen\Monitor\Concerns\SafelyLogs;
 use Mooeen\Monitor\Recorder\Concerns\ManagesBucketedRecords;
 use Mooeen\Monitor\Recorder\Concerns\MasksSensitiveUrl;
 use Mooeen\Monitor\Recorder\Concerns\TracksDailyCap;
@@ -31,6 +32,7 @@ class RuntimeErrorRecorder
 {
     use ManagesBucketedRecords;
     use MasksSensitiveUrl;
+    use SafelyLogs;
     use TracksDailyCap;
     use WritesBucketedYaml;
 
@@ -73,13 +75,19 @@ class RuntimeErrorRecorder
 
         try {
             $request ??= function_exists('request') ? request() : null;
-            $hash     = $this->makeHash($e);
-            $existing = $this->find($hash);
+            $hash = $this->makeHash($e);
+            // 用「记录实际所在的桶」而非 yaml 内 status 字段判定 —— 桶目录是 status 的唯一真源
+            // (deriveRow 同设计),迁移来的旧 yaml 可能 status 字段与落盘桶不一致。
+            $bucket   = $this->findBucket($hash);
+            $existing = $bucket !== null ? $this->readFile($hash, $bucket) : null;
             $now      = $this->nowIso();
+            $isNew    = false;
 
-            if ($existing && ($existing['status'] ?? 'open') === 'resolved') {
-                // resolved → 再触发 → reopen + count+1
-                $this->moveFile($hash, 'resolved', 'open');
+            if ($existing && $bucket !== 'open') {
+                // resolved / deleted 桶里的同 hash 复发 → 搬回 open 复活 + count+1。
+                // 之前 deleted 不在此分支:会被当普通已存在记录写进 open,留下「同 hash 同时存在两桶」
+                // 的跨桶重复(破坏聚合不变量、把已软删问题悄悄推回云端)。moveFile 从真实源桶搬。
+                $this->moveFile($hash, $bucket, 'open');
                 $existing['status']        = 'open';
                 $existing['resolved_at']   = null;
                 $existing['resolved_by']   = null;
@@ -92,14 +100,15 @@ class RuntimeErrorRecorder
                 }
                 $data = $this->refresh($existing, $e, $request, $now);
             } else {
-                if ($this->cachedOpenCount() >= (int) ($this->config['max_open'] ?? 500)) {
+                if ($this->openBucketFull()) {
                     return null;
                 }
-                $data = $this->build($hash, $e, $request, $now);
+                $data  = $this->build($hash, $e, $request, $now);
+                $isNew = true;
             }
 
             $this->ensureDir();
-            if (! $this->writeFile($hash, 'open', $data)) {
+            if (! $this->writeFile($hash, 'open', $data, $isNew)) {
                 $this->logWriteFailure($e, $request);
 
                 return null;
@@ -107,9 +116,9 @@ class RuntimeErrorRecorder
 
             return $hash;
         } catch (Throwable $self) {
-            if (function_exists('app')) {
-                app('log')->warning('runtime-recorder failed: ' . $self->getMessage());
-            }
+            // safeLog:日志写入本身也可能抛(database/slack 通道后端不可用),否则会逃出 record()
+            // → 经 ExceptionDispatcher 冒泡进宿主异常链。record() 对调用方只返回 string|null,永不抛。
+            $this->safeLog('warning', 'runtime-recorder failed: ' . $self->getMessage());
 
             return null;
         }
@@ -123,20 +132,22 @@ class RuntimeErrorRecorder
     private function logWriteFailure(Throwable $origin, ?Request $request): void
     {
         static $logged = false;
-        if ($logged || ! function_exists('app')) {
+        if ($logged) {
             return;
         }
         $logged = true;
 
         $openDir = $this->basePath . '/open';
-        app('log')->error('runtime-recorder: 写盘失败(目录不可写?) ' . $openDir, [
+        // url 必须走 maskUrl:整条采集链路落盘 request.url 都脱敏,唯独这条诊断日志若用裸 fullUrl(),
+        // 会把 ?token=/api_key= 等密钥明文写进宿主 laravel.log(常被 ELK/Loki 集中采集)。
+        $this->safeLog('error', 'runtime-recorder: 写盘失败(目录不可写?) ' . $openDir, [
             'is_dir'   => is_dir($openDir),
             'writable' => is_writable(is_dir($openDir) ? $openDir : dirname($openDir)),
             'perms'    => is_dir($openDir) ? substr(sprintf('%o', (int) @fileperms($openDir)), -4) : null,
             'owner'    => is_dir($openDir) ? @fileowner($openDir) : null,
             'php_uid'  => function_exists('posix_geteuid') ? posix_geteuid() : null,
             'origin'   => get_class($origin),
-            'url'      => $request?->fullUrl(),
+            'url'      => $request !== null ? $this->maskUrl($request->fullUrl()) : null,
         ]);
     }
 
@@ -304,7 +315,8 @@ class RuntimeErrorRecorder
     private function extractTrace(Throwable $e): array
     {
         // 先脱敏再截断:trace 里的函数参数可能含 JWT / 裸密钥;先 mask 避免被截断切断导致漏 mask。
-        $full     = $this->maskSecrets($e->getTraceAsString());
+        // maskSensitiveSql + maskSecrets 双层,与 extractException 的 message 脱敏强度对齐(原先只做后者)。
+        $full     = $this->maskSecrets($this->maskSensitiveSql($e->getTraceAsString()));
         $maxBytes = (int) ($this->config['trace_max_bytes'] ?? 65536);
         if (strlen($full) > $maxBytes) {
             $full = substr($full, 0, $maxBytes) . "\n... (truncated)";
@@ -407,8 +419,15 @@ class RuntimeErrorRecorder
         if (is_string($value)) {
             $value = $this->maskSecrets($value);
             $cap   = (int) ($this->config['string_truncate'] ?? 200);
-            if (strlen($value) > $cap) {
-                return substr($value, 0, $cap - 20) . '…<+' . (strlen($value) - $cap + 20) . ' chars>';
+            // 多字节安全 + 非负长度:原先用字节级 substr,中文/emoji 截在 UTF-8 字符中间会产出非法串,
+            // 被 symfony/yaml 整段 !!binary base64 化(不可读);cap<20 时 cap-20 为负还会反向放大。
+            // 改用字符级 mb_substr + max(0,…),与 SqlSlowRecorder::truncate 对齐。
+            $len = function_exists('mb_strlen') ? mb_strlen($value, 'UTF-8') : strlen($value);
+            if ($len > $cap) {
+                $keep  = max(0, $cap - 20);
+                $slice = function_exists('mb_substr') ? mb_substr($value, 0, $keep, 'UTF-8') : substr($value, 0, $keep);
+
+                return $slice . '…<+' . ($len - $keep) . ' chars>';
             }
 
             return $value;

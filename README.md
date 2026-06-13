@@ -130,6 +130,19 @@ php artisan moo:cloud:push
 3. 项目是否真的触发过异常或慢 SQL。
 4. 慢 SQL 是否已开启，阈值是否过高。
 5. 服务器是否能访问 `MOO_MONITOR_CLOUD_URL`。
+6. 内网自签证书导致 TLS 校验失败时，设 `MOO_MONITOR_CLOUD_VERIFY=false`。
+
+### 推送一直失败
+
+为保证不丢数据，某一类（runtimes / slow_sql）只要有一批推送失败，游标就不前进、下次重试同一批，该类的本地缓冲也不会被回收。因此**单条被云端持久拒收的记录会卡住整类推送并让本地缓冲持续增长**。
+
+`moo:cloud:push` 失败时会打印卡住的记录 hash（自动调度的后台运行则写入日志），据此定位：
+
+```text
+storage/moo-monitor/<runtimes|sql-slows>/<open|resolved>/<hash>.yaml
+```
+
+确认该记录无需保留后，可手动移走或删除对应 yaml，再重新推送。
 
 ## 自动推送
 
@@ -177,7 +190,10 @@ php artisan moo:cloud:push
 | `MOO_MONITOR_CLOUD_ENABLED` | `false` | 是否启用云端推送。 |
 | `MOO_MONITOR_CLOUD_URL` | `https://sc.mooeen.com` | 云端地址。 |
 | `MOO_MONITOR_CLOUD_TOKEN` | 空 | 项目接入 token。 |
+| `MOO_MONITOR_CLOUD_TIMEOUT` | `5` | 推送 HTTP 超时(秒)。 |
+| `MOO_MONITOR_CLOUD_VERIFY` | `true` | TLS 证书校验,内网自签证书可设为 `false`。 |
 | `MOO_MONITOR_CLOUD_BATCH` | `100` | 每批推送数量。 |
+| `MOO_MONITOR_CLOUD_SCHEDULE` | `true` | 与 `ENABLED` 同时为真时自动挂每分钟推送。 |
 | `MOO_MONITOR_CLOUD_LOCAL_RETENTION_DAYS` | `7` | 推送成功后本地缓冲保留天数。 |
 
 更多配置见 `config/moo-monitor.php`，每个字段都有注释。

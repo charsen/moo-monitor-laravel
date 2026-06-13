@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Mooeen\Monitor\Cloud;
 
+use Mooeen\Monitor\Concerns\SafelyLogs;
 use Symfony\Component\Yaml\Yaml;
 use Throwable;
 
@@ -23,6 +24,8 @@ use Throwable;
  */
 class CloudSync
 {
+    use SafelyLogs;
+
     /** @var array<string,array{path:string,endpoint:string,push_key:string}> */
     private const TYPES = [
         'runtimes' => [
@@ -64,7 +67,7 @@ class CloudSync
     /**
      * 同步一类记录。
      *
-     * @return array{type:string,skipped:bool,reason:?string,scanned:int,changed:int,pushed:int,batches:int,ok:bool,error:?string}
+     * @return array{type:string,skipped:bool,reason:?string,scanned:int,changed:int,pushed:int,batches:int,ok:bool,error:?string,failed_hashes:array<int,string>}
      */
     public function sync(string $type, bool $all = false, bool $dryRun = false): array
     {
@@ -128,7 +131,17 @@ class CloudSync
             $batches++;
             $r = $client->send($base['endpoint'], $chunk);
             if (! $r['ok']) {
-                return $this->result($type, scanned: $scanned, changed: count($changed), pushed: $pushed, batches: $batches, ok: false, error: $r['error']);
+                // 失败批的 hash 暴露出来:单条被云端持久拒收会卡死整类游标(下次重推同一批又失败),
+                // 且 prune 仅在 ok 时跑 → 本地缓冲持续膨胀。退出码只是 FAILURE、心跳照常,极难发现。
+                // 列出毒批 hash 让运维能定位;best-effort 日志保证 schedule 后台跑(输出进 /dev/null)也留痕。
+                $failedHashes = $this->hashesOf($chunk);
+                $this->safeLog('warning', "moo-monitor: 推送 {$type} 失败,游标不前进、本地缓冲将累积。云端错误:{$r['error']}", [
+                    'type'          => $type,
+                    'failed_hashes' => $failedHashes,
+                    'batch'         => $batches,
+                ]);
+
+                return $this->result($type, scanned: $scanned, changed: count($changed), pushed: $pushed, batches: $batches, ok: false, error: $r['error'], failedHashes: $failedHashes);
             }
             $pushed += count($chunk);
         }
@@ -329,7 +342,27 @@ class CloudSync
         }
     }
 
-    /** @return array{type:string,skipped:bool,reason:?string,scanned:int,changed:int,pushed:int,batches:int,ok:bool,error:?string} */
+    /**
+     * 取一批记录的 hash 列表(失败批定位用)。
+     *
+     * @param array<int,array<string,mixed>> $records
+     *
+     * @return array<int,string>
+     */
+    private function hashesOf(array $records): array
+    {
+        $out = [];
+        foreach ($records as $rec) {
+            $h = (string) ($rec['hash'] ?? '');
+            if ($h !== '') {
+                $out[] = $h;
+            }
+        }
+
+        return $out;
+    }
+
+    /** @return array{type:string,skipped:bool,reason:?string,scanned:int,changed:int,pushed:int,batches:int,ok:bool,error:?string,failed_hashes:array<int,string>} */
     private function result(
         string $type,
         bool $skipped = false,
@@ -340,7 +373,9 @@ class CloudSync
         int $batches = 0,
         bool $ok = true,
         ?string $error = null,
+        array $failedHashes = [],
     ): array {
-        return compact('type', 'skipped', 'reason', 'scanned', 'changed', 'pushed', 'batches', 'ok', 'error');
+        return compact('type', 'skipped', 'reason', 'scanned', 'changed', 'pushed', 'batches', 'ok', 'error')
+            + ['failed_hashes' => $failedHashes];
     }
 }

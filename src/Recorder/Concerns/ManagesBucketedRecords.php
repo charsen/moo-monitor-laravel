@@ -18,6 +18,13 @@ use Throwable;
  *   - const CACHE_OPEN_COUNT(open 数缓存 key,各类型独立)
  *   - deriveRow(string $bucket, array $data): array(单条 yaml → 派生 row,字段各类型不同)
  *   - WritesBucketedYaml 的 writeFile/moveFile/deleteFile/find/countOpen(两个 recorder 都 use 了)
+ *
+ * 并发语义(刻意取舍,接入方须知):record() 的 find→refresh(count+1)→writeFile 是无锁的
+ * read-modify-write。多 worker / 队列在同一窗口命中同一 hash 时,后写者 last-write-wins 覆盖前写者,
+ * 聚合 count 会偏低(热点条目偏差最大)。这是 best-effort 近似计数,不保证精确 —— 但不影响告警是否
+ * 触发(count>=1 云端即可见),云端按 (project,hash) upsert 幂等,下次同 hash 写盘又基于最新落盘值续累,
+ * 不会越漂越远。写盘本身是原子 rename,并发只会 last-write-wins,绝不写出半截/损坏 yaml。
+ * 刻意不上 flock:会给宿主每条异常/慢查询的同步热路径加锁竞争,违背「采集绝不拖垮宿主」不变量。
  */
 trait ManagesBucketedRecords
 {
@@ -27,6 +34,22 @@ trait ManagesBucketedRecords
         $v = (int) ($this->config['cache_ttl'] ?? 30);
 
         return $v > 0 ? $v : 30;
+    }
+
+    /**
+     * open 桶是否已达写盘上限(record() 新建分支的写盘闸)。
+     *
+     * 先看缓存计数;仅当缓存说「已满」时,再 countOpen() 实测复核一次,实测仍满才拦。
+     * 因为 open 桶条数也会被本进程之外的路径减少 —— CloudSync::pruneLocal 直接 unlink open dormant 文件、
+     * moo:monitor:migrate 直接 rename、云端回收等都不会 forgetOpenCountCache()。陈旧的偏大缓存会在接近上限时
+     * 把本该落盘的新 hash 误判成桶满、return null 静默丢弃(最长一个 TTL)。实测复核把这条误判堵在临界点,
+     * 代价仅是「接近满」这一罕见分支多一次 glob,高频热路径不受影响。
+     */
+    protected function openBucketFull(): bool
+    {
+        $max = (int) ($this->config['max_open'] ?? 500);
+
+        return $this->cachedOpenCount() >= $max && $this->countOpen() >= $max;
     }
 
     /**
