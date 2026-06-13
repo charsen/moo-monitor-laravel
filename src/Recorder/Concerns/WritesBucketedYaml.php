@@ -78,6 +78,13 @@ trait WritesBucketedYaml
             return 0;
         }
 
-        return count(glob($dir . '/*.yaml') ?: []);
+        $n = 0;
+        foreach (glob($dir . '/*.yaml') ?: [] as $file) {
+            if ($this->isValidHash(basename($file, '.yaml'))) {
+                $n++;
+            }
+        }
+
+        return $n;
     }
 }

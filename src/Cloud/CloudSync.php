@@ -91,9 +91,9 @@ class CloudSync
         $cursor      = $all ? null : ($this->readState()[$type] ?? null);
         $cursorEpoch = $cursor ? $this->epochFloat($cursor) : 0.0;
 
-        // 读取 open + resolved 两桶:--all 全量解析;否则 mtime 严格早于游标秒的文件不解析直接跳过。
+        // 读取 open + resolved 两桶。是否增量推送由记录内 meta.updated_at / last_seen 与游标比较决定。
         $basePath = $this->resolvePath((string) config($base['path'], ''));
-        $read     = $this->readRecords($basePath, $all ? 0.0 : $cursorEpoch);
+        $read     = $this->readRecords($basePath);
         $scanned  = $read['scanned'];
         $records  = $read['records'];
 
@@ -162,26 +162,25 @@ class CloudSync
 
         // resolved 桶:只清「已随推送上云」的 —— meta.updated_at(回退 resolved_at/last_seen)<= 推送游标。
         // push 读取后、prune 前才被 resolve 的记录尚未上云 → 留着,下轮推完再清。无游标(从未成功推过)→ 不删。
-        // 优化:mtime >= meta.updated_at,mtime <= 游标必已上云(免解析);mtime > 游标的才解析精确判断。
+        // 不用 mtime 免解析快删:迁移/复制/外部同步可能保留旧 mtime,但 yaml 内 updated_at 更晚。
         $cursorEpoch = $this->epochFloat((string) ($this->readState()[$type] ?? ''));
         $purged      = 0;
         foreach (glob($basePath . '/resolved/*.yaml') ?: [] as $file) {
             if ($cursorEpoch <= 0) {
                 continue; // 没有已推水位 → 一律不删 resolved(避免删未上云的)
             }
-            $mt = @filemtime($file);
-            // mtime 是整数秒:只有「严格早于游标秒」的才必定已上云、可免解析删;落在游标秒(含)及之后的解析看
-            // 精确毫秒 meta.updated_at —— 与 push 的跳过判定同一精度,杜绝「同一秒内 resolve 后被 prune 误删却没上云」。
-            if ($mt === false || $mt >= (int) floor($cursorEpoch)) {
-                try {
-                    $rec = Yaml::parse((string) @file_get_contents($file));
-                } catch (Throwable) {
-                    continue; // 解析失败 → 保守不删
-                }
-                $ts = is_array($rec) ? (string) ($rec['meta']['updated_at'] ?? $rec['resolved_at'] ?? $rec['last_seen'] ?? '') : '';
-                if (($ts !== '' ? $this->epochFloat($ts) : PHP_FLOAT_MAX) > $cursorEpoch) {
-                    continue; // 尚未上云 → 留着,下轮再清
-                }
+            try {
+                $rec = Yaml::parse((string) @file_get_contents($file));
+            } catch (Throwable) {
+                continue; // 解析失败 → 保守不删
+            }
+            if (! is_array($rec)) {
+                continue;
+            }
+            $ts    = (string) ($rec['meta']['updated_at'] ?? $rec['resolved_at'] ?? $rec['last_seen'] ?? '');
+            $epoch = $ts !== '' ? $this->epochFloat($ts) : (float) (@filemtime($file) ?: PHP_FLOAT_MAX);
+            if ($epoch > $cursorEpoch) {
+                continue; // 尚未上云 → 留着,下轮再清
             }
             if (@unlink($file)) {
                 $purged++;
@@ -213,25 +212,21 @@ class CloudSync
     /**
      * 把 base_path 下 open + resolved 两桶的 yaml 解析成记录(原样,补 hash)。
      *
-     * mtime 预筛:writeFile 刷 meta.updated_at 的同刻 touch 文件 mtime,故 mtime >= meta.updated_at。
-     * 传 $cursorEpoch>0 时,mtime <= 游标的文件「自上次推送后没变」→ 不解析直接跳过(stat 便宜、parse 贵),
-     * 把稳态成本从「每分钟全量 parse」降到「只 parse 变化的」。$scanned 仍统计全部文件数。
+     * 不用 mtime 预筛:迁移、复制、外部同步可能保留旧 mtime,但 yaml 内 meta.updated_at 更晚。
+     * 这里宁可多 parse 几百条本地缓冲,也不能漏推记录。
      *
      * @return array{scanned:int,records:array<int,array>}
      */
-    private function readRecords(string $basePath, float $cursorEpoch = 0.0): array
+    private function readRecords(string $basePath): array
     {
         $scanned = 0;
         $out     = [];
         foreach (['open', 'resolved'] as $bucket) {
             foreach (glob($basePath . '/' . $bucket . '/*.yaml') ?: [] as $file) {
                 $scanned++;
-                if ($cursorEpoch > 0) {
-                    // mtime 整数秒:只跳过「严格早于游标秒」的(必定未变);落在游标秒内的留给精确毫秒过滤判定。
-                    $mt = @filemtime($file);
-                    if ($mt !== false && $mt < (int) floor($cursorEpoch)) {
-                        continue;
-                    }
+                $hash = basename($file, '.yaml');
+                if (! preg_match('/^[a-f0-9]{12}$/', $hash)) {
+                    continue;
                 }
                 try {
                     $rec = Yaml::parse((string) @file_get_contents($file));
@@ -239,10 +234,6 @@ class CloudSync
                     continue; // 坏文件跳过,不阻断整体推送
                 }
                 if (! is_array($rec)) {
-                    continue;
-                }
-                $hash = (string) ($rec['hash'] ?? basename($file, '.yaml'));
-                if (! preg_match('/^[a-f0-9]{12}$/i', $hash)) {
                     continue;
                 }
                 $rec['hash'] = $hash;

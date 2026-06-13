@@ -31,6 +31,7 @@
   },
   "require-dev": {
     "roave/security-advisories": "dev-latest",
+    "larastan/larastan": "^3.0",
     "laravel/pint": "^1.13",
     "pestphp/pest": "^3.0",
     "pestphp/pest-plugin-laravel": "^3.0",
@@ -47,10 +48,21 @@
     }
   },
   "scripts": {
+    "check:composer": "composer validate --strict --no-check-lock",
+    "lint": "./vendor/bin/pint --test",
+    "format": "./vendor/bin/pint",
+    "analyse": "./vendor/bin/phpstan analyse --memory-limit=1G",
+    "quality": [
+      "@check:composer",
+      "@lint",
+      "@analyse",
+      "@test"
+    ],
     "test": "./vendor/bin/pest",
     "test:filter": "./vendor/bin/pest --filter"
   },
   "config": {
+    "lock": false,
     "allow-plugins": {
       "pestphp/pest-plugin": true
     }

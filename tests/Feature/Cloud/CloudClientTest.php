@@ -91,6 +91,23 @@ class CloudClientTest extends TestCase
         $this->assertNotNull($r['error']);
     }
 
+    public function test_send_treats_partial_saved_count_as_failure(): void
+    {
+        $this->configureCloud();
+        Http::fake([
+            'cloud.test/api/v1/runtimes/intake' => Http::response(['ok' => true, 'saved' => 1], 200),
+        ]);
+
+        $r = (new CloudClient)->send(CloudClient::PATH_RUNTIMES, [
+            ['hash' => 'aaaaaaaaaaaa'],
+            ['hash' => 'bbbbbbbbbbbb'],
+        ]);
+
+        $this->assertFalse($r['ok']);
+        $this->assertSame(1, $r['saved']);
+        $this->assertSame('saved 1/2', $r['error']);
+    }
+
     // ---- runtime 读/写(供 moo:cloud:mcp) ----------------------------------
 
     public function test_fetch_runtimes_hits_list_with_token_and_filters(): void

@@ -1,5 +1,6 @@
 <?php declare(strict_types=1);
 
+use Illuminate\Http\Request;
 use Mooeen\Monitor\Recorder\RuntimeErrorRecorder;
 use Mooeen\Monitor\Recorder\SqlSlowRecorder;
 use Symfony\Component\Yaml\Yaml;
@@ -58,6 +59,58 @@ it('SqlSlow: sql_last 里敏感列的值被脱敏', function () {
     }
 });
 
+it('SqlSlow: insert values 里的敏感列被脱敏', function () {
+    $base = sys_get_temp_dir() . '/rhm_' . uniqid();
+    $rec  = new SqlSlowRecorder($base, ['enabled' => true, 'threshold_ms' => 0, 'mask_keys' => ['token', 'password']]);
+
+    try {
+        $rec->record(
+            'insert into users (`email`, `password`, `api_token`) values (?, ?, ?)',
+            "insert into users (`email`, `password`, `api_token`) values ('a@example.test', 'plain-secret', 'tok-secret')",
+            200.0,
+            '/app/F.php',
+            10
+        );
+        $last = Yaml::parseFile(glob($base . '/open/*.yaml')[0])['sql']['last'];
+
+        expect($last)->toContain("'a@example.test'")
+            ->and($last)->toContain('***')
+            ->and($last)->not->toContain('plain-secret')
+            ->and($last)->not->toContain('tok-secret');
+    } finally {
+        rhm_rm($base);
+    }
+});
+
+it('Runtime: Authorization Basic 凭据被完整脱敏', function () {
+    $base = sys_get_temp_dir() . '/rhm_' . uniqid();
+    $rec  = new RuntimeErrorRecorder($base, ['enabled' => true, 'mask_keys' => ['token', 'password', 'authorization']]);
+
+    try {
+        $rec->record(rhm_exc('upstream failed Authorization: Basic dXNlcjpwYXNz'));
+        $msg = Yaml::parseFile(glob($base . '/open/*.yaml')[0])['exception']['message'];
+
+        expect($msg)->toContain('Authorization: ***')->not->toContain('dXNlcjpwYXNz');
+    } finally {
+        rhm_rm($base);
+    }
+});
+
+it('SqlSlow: sql_last 非敏感列里的 Bearer / JWT 被脱敏', function () {
+    $base = sys_get_temp_dir() . '/rhm_' . uniqid();
+    $rec  = new SqlSlowRecorder($base, ['enabled' => true, 'threshold_ms' => 0, 'mask_keys' => ['token', 'password']]);
+
+    try {
+        $jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJVadQssw5c';
+        $rec->record('select * from t where note = ?', "select * from t where note = 'Bearer {$jwt}'", 200.0, '/app/F.php', 10);
+        $last = Yaml::parseFile(glob($base . '/open/*.yaml')[0])['sql']['last'];
+
+        expect($last)->toContain('Bearer ***')->not->toContain('SflKxwRJSM');
+    } finally {
+        rhm_rm($base);
+    }
+});
+
 it('Runtime: message 里可变 UUID → 同一 hash(count 聚合)', function () {
     $base = sys_get_temp_dir() . '/rhm_' . uniqid();
     $rec  = new RuntimeErrorRecorder($base, ['enabled' => true, 'mask_keys' => ['token']]);
@@ -97,6 +150,57 @@ it('Runtime: exc_message 里的 JWT / Bearer 被脱敏(非 SQL 形态)', functio
         $msg = Yaml::parseFile(glob($base . '/open/*.yaml')[0])['exception']['message'];
 
         expect($msg)->toContain('***')->not->toContain('SflKxwRJSM');
+    } finally {
+        rhm_rm($base);
+    }
+});
+
+it('Runtime: payload 字符串里的 Bearer / JWT 被脱敏', function () {
+    $base = sys_get_temp_dir() . '/rhm_' . uniqid();
+    $rec  = new RuntimeErrorRecorder($base, ['enabled' => true, 'mask_keys' => ['token', 'password']]);
+
+    try {
+        $jwt     = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJVadQssw5c';
+        $request = Request::create('/submit', 'POST', ['note' => "Bearer {$jwt}"]);
+        $rec->record(rhm_exc('payload leak'), $request);
+        $payload = Yaml::parseFile(glob($base . '/open/*.yaml')[0])['payload'];
+
+        expect($payload['note'])->toContain('Bearer ***')->not->toContain('SflKxwRJSM');
+    } finally {
+        rhm_rm($base);
+    }
+});
+
+it('Runtime: payload 里的对象被安全占位,不序列化属性', function () {
+    $base = sys_get_temp_dir() . '/rhm_' . uniqid();
+    $rec  = new RuntimeErrorRecorder($base, ['enabled' => true, 'mask_keys' => ['token', 'password']]);
+
+    try {
+        $obj           = new stdClass;
+        $obj->password = 'plain-secret';
+        $request       = Request::create('/submit', 'POST', ['profile' => $obj]);
+        $hash          = $rec->record(rhm_exc('payload object'), $request);
+        $payload       = Yaml::parseFile($base . '/open/' . $hash . '.yaml')['payload'];
+
+        expect($payload['profile'])->toBe('<object:stdClass>');
+        expect(file_get_contents($base . '/open/' . $hash . '.yaml'))->not->toContain('plain-secret');
+    } finally {
+        rhm_rm($base);
+    }
+});
+
+it('Runtime: message 里不同 Bearer / JWT 不拆 hash', function () {
+    $base = sys_get_temp_dir() . '/rhm_' . uniqid();
+    $rec  = new RuntimeErrorRecorder($base, ['enabled' => true, 'mask_keys' => ['token', 'password']]);
+
+    try {
+        $jwt1 = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJVadQssw5c';
+        $jwt2 = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIyIn0.mF9vXyXyXyXyXyXyXyXyXyXyXyXyXyXyXyX';
+        $h1   = $rec->record(rhm_exc("auth failed for Bearer {$jwt1}"));
+        $h2   = $rec->record(rhm_exc("auth failed for Bearer {$jwt2}"));
+
+        expect($h1)->toBe($h2);
+        expect((int) Yaml::parseFile(glob($base . '/open/*.yaml')[0])['count'])->toBe(2);
     } finally {
         rhm_rm($base);
     }

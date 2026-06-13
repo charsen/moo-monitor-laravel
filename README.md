@@ -1,22 +1,34 @@
 # moo-monitor-laravel
 
-> Laravel 运行时异常 + 慢 SQL 监控 SDK,推送到 [moo-scaffold-cloud](https://gitee.com/charsen/moo-scaffold-cloud) 集中查看、告警与处置。
->
-> 对标 [moo-monitor-vue](https://gitee.com/charsen/moo-monitor-vue)(Vue 3 前端监控):**前端装 monitor-vue,Laravel 后端装本包**,云端统一汇聚。原内置于 [moo-scaffold](https://gitee.com/charsen/moo-scaffold)(≤3.8),3.9.0 起抽离成独立包 —— 不用 scaffold 的 Laravel 项目也能接入云端。
+Laravel 后端监控采集 SDK，用来把项目里的 **运行时异常** 和 **慢 SQL** 上报到 [moo-scaffold-cloud](https://gitee.com/charsen/moo-scaffold-cloud) 集中查看、告警和处理。
 
-定位:**headless 采集端**。本地不带任何查看界面 —— 采集 → 缓冲(`storage/moo-monitor/`,自带 .gitignore)→ 推送,查看与处置统一在云端。
+这个包是一个 **headless 采集端**：不提供本地页面、不注册业务路由，只负责采集数据、写入本地缓冲目录，再推送到云端。
 
-环境:Laravel 12 · PHP 8.2+。零额外依赖(仅 framework + symfony/yaml)。
+## 适用场景
 
-## 能力一览
+- Laravel 项目需要统一收集后端异常。
+- 想知道哪些 SQL 超时、在哪个文件和行号触发。
+- 多个项目需要在同一个云端控制台查看问题、告警和处理状态。
+- 从 `moo-scaffold <= 3.8` 升级后，需要继续沿用原来的监控数据。
 
-| 能力 | 机制 | 说明 |
-|---|---|---|
-| 运行时异常采集 | 自动挂 reportable 钩子(宿主零接入) | trace + 触发源码片段 ±10 行 + 请求现场;敏感字段/JWT/Bearer 脱敏;同 hash 聚合 count、日上限防刷 |
-| 慢 SQL 采集 | 监听 `QueryExecuted`(同步,PDO 不可入队列) | 超阈值落盘,normalized SQL + file:line 聚合;binding 还原 + 值侧脱敏;skip_patterns 降噪 |
-| 云端推送 | `moo:cloud:push`(命令 / scheduler 自动挂) | 增量(meta.updated_at 游标)、幂等(云端按 project+hash upsert)、推后回收本地;每拍带心跳 |
-| AI 接入(MCP) | `moo:cloud:mcp`(stdio JSON-RPC) | 云端 runtime 错误 + 待办六工具:拉取 → 认领 → 修复 → 回写闭环 |
-| 旧版迁移 | `moo:monitor:migrate` | scaffold ≤3.8 的本地 yaml / 游标平移到新布局 + .env 改名体检(幂等) |
+## 业务功能
+
+| 功能 | 说明 |
+| --- | --- |
+| 运行时异常监控 | 自动接入 Laravel 异常上报链路，记录异常类型、消息、文件行号、请求 URL、用户、调用栈和源码片段。 |
+| 慢 SQL 监控 | 监听 Laravel `QueryExecuted` 事件，超过阈值的 SQL 会被记录，包含执行耗时、SQL 内容、触发位置和请求信息。 |
+| 相同问题聚合 | 相同异常或相同慢 SQL 会按 hash 聚合，累计出现次数，避免同一个问题刷屏。 |
+| 敏感信息脱敏 | 对 password、token、secret、authorization 等常见敏感字段做脱敏处理。 |
+| 本地缓冲 | 数据先写入 `storage/moo-monitor/`，云端或网络异常不会影响业务请求。 |
+| 云端推送 | 通过 `moo:cloud:push` 增量推送到 moo-scaffold-cloud，云端负责查看、告警和处置。 |
+| AI / MCP 辅助处理 | 可通过 `moo:cloud:mcp` 让 Claude Code / Codex 等工具读取云端 runtime 错误和待办，并回写处理状态。 |
+| 旧版迁移 | 支持从 `moo-scaffold <= 3.8` 的本地监控目录迁移到新目录。 |
+
+## 环境要求
+
+- PHP 8.2+
+- Laravel 12
+- 依赖：`laravel/framework`、`symfony/yaml`
 
 ## 安装
 
@@ -24,86 +36,209 @@
 composer require charsen/moo-monitor-laravel
 ```
 
-> 私包未发 Packagist,宿主 composer.json 先加仓库源:
-> ```json
-> "repositories": [{ "type": "vcs", "url": "git@gitee.com:charsen/moo-monitor-laravel.git" }]
-> ```
-> 本地联调改用 path repo:`{ "type": "path", "url": "../moo-monitor-laravel" }`。
-> 装了 moo-scaffold ≥3.9 的项目**无需单独装**,依赖自动带入。
+如果包还没有发布到 Packagist，需要先在宿主项目的 `composer.json` 增加仓库源：
 
-`.env` 两行接入(token 在云端「接入 Token」页生成,勾 `runtimes` + `slow_queries`):
+```json
+{
+  "repositories": [
+    {
+      "type": "vcs",
+      "url": "git@gitee.com:charsen/moo-monitor-laravel.git"
+    }
+  ]
+}
+```
+
+本地联调可以使用 path repository：
+
+```json
+{
+  "repositories": [
+    {
+      "type": "path",
+      "url": "../moo-monitor-laravel"
+    }
+  ]
+}
+```
+
+如果项目已经安装 `moo-scaffold >= 3.9`，通常不需要单独安装本包，scaffold 会自动依赖它。
+
+## 快速接入
+
+在宿主项目 `.env` 中配置云端推送：
 
 ```env
 MOO_MONITOR_CLOUD_ENABLED=true
 MOO_MONITOR_CLOUD_TOKEN=moo_xxxxxxxx
-# MOO_MONITOR_CLOUD_URL=https://sc.mooeen.com   # 默认值,私有部署才覆盖
+
+# 私有部署时再配置，默认是 https://sc.mooeen.com
+# MOO_MONITOR_CLOUD_URL=https://sc.mooeen.com
 ```
 
-完事。异常采集默认开启(`MOO_MONITOR_RUNTIME_ENABLED=true`);慢 SQL 默认关,要开:
+Token 在 moo-scaffold-cloud 的「接入 Token」页面生成，建议开启 `runtimes` 和 `slow_queries` 能力。
+
+运行时异常默认开启：
+
+```env
+MOO_MONITOR_RUNTIME_ENABLED=true
+```
+
+慢 SQL 默认关闭，需要时开启：
 
 ```env
 MOO_MONITOR_SQL_SLOW_ENABLED=true
 MOO_MONITOR_SQL_SLOW_THRESHOLD_MS=100
 ```
 
-自动推送依赖宿主在跑 Laravel scheduler(`schedule:run`);没跑就手动 `php artisan moo:cloud:push`。
+发布配置文件可查看更多选项：
 
-完整配置:`php artisan vendor:publish --tag=moo-monitor-config` → `config/moo-monitor.php`(max_open / daily_cap / mask_keys / skip_patterns / 回收阈值等,均有注释)。
+```bash
+php artisan vendor:publish --tag=moo-monitor-config
+```
 
-## 命令
+配置文件位置：
 
-| 命令 | 作用 |
-|---|---|
-| `moo:cloud:push [--type=runtimes\|slow_sql\|both] [--all] [--dry-run]` | 增量、幂等推送本地缓冲到云端,推后回收 + 心跳 |
-| `moo:cloud:mcp` | MCP server:云端 runtime 错误 + 待办暴露给本仓 AI(Claude Code / Codex) |
-| `moo:monitor:migrate [--dry-run]` | 从 moo-scaffold ≤3.8 迁移旧数据 / 游标(幂等);.env 旧变量体检 |
+```text
+config/moo-monitor.php
+```
 
-MCP 接入(零额外 token,复用 `.env` 的 URL + TOKEN):
+## 验证是否接入成功
+
+清理配置缓存：
+
+```bash
+php artisan config:clear
+```
+
+查看本地是否有待推送数据：
+
+```bash
+php artisan moo:cloud:push --dry-run
+```
+
+真实推送一次：
+
+```bash
+php artisan moo:cloud:push
+```
+
+如果云端没有数据，按顺序检查：
+
+1. `.env` 中 `MOO_MONITOR_CLOUD_ENABLED` 是否为 `true`。
+2. `MOO_MONITOR_CLOUD_TOKEN` 是否正确，且 token 有对应能力。
+3. 项目是否真的触发过异常或慢 SQL。
+4. 慢 SQL 是否已开启，阈值是否过高。
+5. 服务器是否能访问 `MOO_MONITOR_CLOUD_URL`。
+
+## 自动推送
+
+当以下配置同时满足时，包会自动注册每分钟推送任务：
+
+```env
+MOO_MONITOR_CLOUD_ENABLED=true
+MOO_MONITOR_CLOUD_SCHEDULE=true
+```
+
+宿主项目仍然需要正常运行 Laravel scheduler。服务器 crontab 示例：
+
+```cron
+* * * * * cd /path/to/project && php artisan schedule:run >> /dev/null 2>&1
+```
+
+没有接入 scheduler 时，也可以用自己的定时任务执行：
+
+```bash
+php artisan moo:cloud:push
+```
+
+## 常用命令
+
+| 命令 | 说明 |
+| --- | --- |
+| `php artisan moo:cloud:push` | 推送 runtime 异常和慢 SQL 到云端。 |
+| `php artisan moo:cloud:push --dry-run` | 只统计待推送数量，不发送请求。 |
+| `php artisan moo:cloud:push --type=runtimes` | 只推送运行时异常。 |
+| `php artisan moo:cloud:push --type=slow_sql` | 只推送慢 SQL。 |
+| `php artisan moo:cloud:push --all` | 忽略游标，全量重推。云端按 hash 幂等处理。 |
+| `php artisan moo:cloud:mcp` | 启动 MCP server，供 AI 工具读取云端错误和待办。 |
+| `php artisan moo:monitor:migrate` | 从 `moo-scaffold <= 3.8` 迁移旧监控数据。 |
+
+## 常用配置
+
+| 配置 | 默认值 | 说明 |
+| --- | --- | --- |
+| `MOO_MONITOR_RUNTIME_ENABLED` | `true` | 是否采集运行时异常。 |
+| `MOO_MONITOR_RUNTIME_MAX_OPEN` | `500` | 本地 open 异常最大数量。 |
+| `MOO_MONITOR_RUNTIME_DAILY_CAP` | `10` | 同一异常每天最多写盘次数。 |
+| `MOO_MONITOR_SQL_SLOW_ENABLED` | `false` | 是否采集慢 SQL。 |
+| `MOO_MONITOR_SQL_SLOW_THRESHOLD_MS` | `100` | 慢 SQL 阈值，单位毫秒。 |
+| `MOO_MONITOR_SQL_SLOW_MAX_OPEN` | `500` | 本地 open 慢 SQL 最大数量。 |
+| `MOO_MONITOR_CLOUD_ENABLED` | `false` | 是否启用云端推送。 |
+| `MOO_MONITOR_CLOUD_URL` | `https://sc.mooeen.com` | 云端地址。 |
+| `MOO_MONITOR_CLOUD_TOKEN` | 空 | 项目接入 token。 |
+| `MOO_MONITOR_CLOUD_BATCH` | `100` | 每批推送数量。 |
+| `MOO_MONITOR_CLOUD_LOCAL_RETENTION_DAYS` | `7` | 推送成功后本地缓冲保留天数。 |
+
+更多配置见 `config/moo-monitor.php`，每个字段都有注释。
+
+## 本地数据目录
+
+数据默认写在宿主项目的 `storage/moo-monitor/`：
+
+```text
+storage/moo-monitor/
+├── runtimes/
+│   ├── open/
+│   ├── resolved/
+│   └── deleted/
+├── sql-slows/
+│   ├── open/
+│   ├── resolved/
+│   └── deleted/
+└── cloud-sync.json
+```
+
+该目录会自动写入 `.gitignore`，监控数据不会进入宿主项目 git。
+
+## MCP 接入
+
+MCP 用于让 AI 工具直接读取云端 runtime 错误和待办，适合“拉问题 → 看上下文 → 修复 → 回写已解决”的流程。
+
+示例：
 
 ```bash
 claude mcp add moo-cloud -- php artisan moo:cloud:mcp
 ```
 
-## 从 moo-scaffold ≤3.8 迁移
+MCP 复用 `.env` 中的 `MOO_MONITOR_CLOUD_URL` 和 `MOO_MONITOR_CLOUD_TOKEN`，不需要额外 token。
 
-env 改名对照(**无兼容回落**,前缀 `SCAFFOLD_` → `MOO_MONITOR_`,后缀不变):
+## 从 moo-scaffold <= 3.8 迁移
 
-| 旧 | 新 |
-|---|---|
+`moo-scaffold <= 3.8` 中的监控能力已经拆分到本包。升级时按下面步骤处理：
+
+```bash
+composer update charsen/moo-scaffold
+php artisan moo:monitor:migrate
+php artisan moo:cloud:push --dry-run
+```
+
+旧环境变量需要改名前缀：
+
+| 旧变量 | 新变量 |
+| --- | --- |
 | `SCAFFOLD_RUNTIME_*` | `MOO_MONITOR_RUNTIME_*` |
 | `SCAFFOLD_SQL_SLOW_*` | `MOO_MONITOR_SQL_SLOW_*` |
 | `SCAFFOLD_CLOUD_*` | `MOO_MONITOR_CLOUD_*` |
 
-```bash
-composer update charsen/moo-scaffold      # 3.9.0 自动带入本包
-# .env 按上表改名
-php artisan moo:monitor:migrate           # 平移 scaffold/{runtimes,sql-slows} 与游标(幂等)
-php artisan moo:cloud:push --dry-run      # 验证管道
-# bootstrap/app.php 里旧的 ExceptionDispatcher reportable 手动接入可删(留着也不会双计)
-```
-
-hash 算法与云端契约不变,升级后云端记录无缝延续。
-
-> ⚠ **双重捕获提醒**:不要在 scaffold ≤3.8 的宿主上单独装本包(新旧两套采集并存会重复记录);升级 scaffold 到 3.9.0 一步到位。
-
-## 本地数据布局
-
-```
-storage/moo-monitor/
-├── .gitignore            # 自动写入(* + !.gitignore),数据不入宿主 git
-├── runtimes/{open,resolved,deleted}/<hash>.yaml
-├── sql-slows/{open,resolved,deleted}/<hash>.yaml
-└── cloud-sync.json       # 推送游标
-```
-
-本地仅是云端推送前的**临时缓冲**:推送成功后 `resolved` 全清、`open` 留作聚合锚点(仅清 `local_retention_days` 天前的;`=0` 完全不回收)。
+不要在 `moo-scaffold <= 3.8` 的项目上单独安装本包，否则旧采集器和新采集器可能重复记录。建议先升级到 `moo-scaffold >= 3.9`。
 
 ## 开发
 
 ```bash
 composer install
-composer test            # Pest(Orchestra Testbench,零 env 全绿)
-./vendor/bin/pint        # 代码风格
+composer test
+./vendor/bin/pint
 ```
 
 ## License

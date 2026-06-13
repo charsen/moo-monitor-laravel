@@ -33,6 +33,7 @@ function rmBuckets(string $base): void
 it('RuntimeErrorRecorder::count 按桶 glob,count(null) 为全桶之和', function () {
     $base = sys_get_temp_dir() . '/rt_count_' . uniqid();
     seedBuckets($base, ['open' => 3, 'resolved' => 2, 'deleted' => 1], 12);
+    file_put_contents($base . '/open/not-a-hash.yaml', "status: open\n");
     $r = new RuntimeErrorRecorder($base);
     try {
         expect($r->count('open'))->toBe(3);
@@ -48,11 +49,28 @@ it('RuntimeErrorRecorder::count 按桶 glob,count(null) 为全桶之和', functi
 it('SqlSlowRecorder::count 按桶 glob', function () {
     $base = sys_get_temp_dir() . '/sql_count_' . uniqid();
     seedBuckets($base, ['open' => 1, 'resolved' => 5], 12);
+    file_put_contents($base . '/open/ABCDEF123456.yaml', "status: open\n");
     $r = new SqlSlowRecorder($base);
     try {
         expect($r->count('open'))->toBe(1);
         expect($r->count('resolved'))->toBe(5);
         expect($r->count())->toBe(6);     // deleted 桶不存在 → 0,不报错
+    } finally {
+        rmBuckets($base);
+    }
+});
+
+it('RuntimeErrorRecorder::max_open gate ignores malformed yaml filenames', function () {
+    $base = sys_get_temp_dir() . '/rt_gate_' . uniqid();
+    @mkdir($base . '/open', 0755, true);
+    file_put_contents($base . '/open/not-a-hash.yaml', "status: open\n");
+
+    $r = new RuntimeErrorRecorder($base, ['enabled' => true, 'max_open' => 1]);
+    try {
+        $hash = $r->record(new RuntimeException('real error after dirty file'));
+
+        expect($hash)->not->toBeNull()
+            ->and($r->count('open'))->toBe(1);
     } finally {
         rmBuckets($base);
     }

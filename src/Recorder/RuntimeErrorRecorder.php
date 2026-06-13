@@ -177,6 +177,7 @@ class RuntimeErrorRecorder
      */
     private function normalizeMessage(string $msg): string
     {
+        $msg = $this->maskSecrets($this->maskSensitiveSql($msg));
         $msg = preg_replace("/'[^']*'/", "'X'", $msg) ?? $msg;
         $msg = preg_replace('/"[^"]*"/', '"X"', $msg) ?? $msg;
         // UUID / 0x 内存地址 / 长 hex(token、hash 片段)→ 占位 —— 否则同一异常因 message 里可变的
@@ -295,7 +296,7 @@ class RuntimeErrorRecorder
             'env'         => function_exists('config') ? (string) config('app.env', 'unknown') : 'unknown',
             'project'     => function_exists('config') ? (string) config('app.name', 'unknown') : 'unknown',
             'php'         => PHP_VERSION,
-            'laravel'     => function_exists('app') ? (string) (app()->version() ?? '') : '',
+            'laravel'     => function_exists('app') ? (string) app()->version() : '',
             'occurred_at' => $this->nowIso(),
         ];
     }
@@ -321,7 +322,7 @@ class RuntimeErrorRecorder
             $appFrames[] = [
                 'file'     => $rel,
                 'line'     => $frame['line'] ?? 0,
-                'function' => trim(($frame['class'] ?? '') . ($frame['type'] ?? '') . ($frame['function'] ?? ''), ':'),
+                'function' => trim(($frame['class'] ?? '') . ($frame['type'] ?? '') . $frame['function'], ':'),
             ];
             if (count($appFrames) >= 20) {
                 break;
@@ -404,12 +405,19 @@ class RuntimeErrorRecorder
             return $out;
         }
         if (is_string($value)) {
-            $cap = (int) ($this->config['string_truncate'] ?? 200);
+            $value = $this->maskSecrets($value);
+            $cap   = (int) ($this->config['string_truncate'] ?? 200);
             if (strlen($value) > $cap) {
                 return substr($value, 0, $cap - 20) . '…<+' . (strlen($value) - $cap + 20) . ' chars>';
             }
 
             return $value;
+        }
+        if (is_object($value)) {
+            return '<object:' . get_class($value) . '>';
+        }
+        if (is_resource($value)) {
+            return '<resource:' . get_resource_type($value) . '>';
         }
 
         return $value;

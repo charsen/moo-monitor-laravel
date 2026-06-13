@@ -116,7 +116,7 @@ it('推送成功后回收本地:resolved 桶被清', function () {
         'moo-monitor.cloud.base_url' => 'https://cloud.test',
         'moo-monitor.cloud.token'    => 'moo_' . str_repeat('a1', 20),
     ]);
-    Http::fake(['*' => Http::response(['ok' => true, 'saved' => 1])]);
+    Http::fake(['*' => Http::response(['ok' => true, 'saved' => 2])]);
 
     app(RuntimeErrorRecorder::class)->record(new RuntimeException('boom')); // open
     $dir = storage_path('moo-monitor/runtimes/resolved');

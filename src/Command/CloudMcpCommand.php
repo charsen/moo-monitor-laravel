@@ -318,6 +318,9 @@ class CloudMcpCommand extends Command
         if ($hash === '') {
             return $this->toolError('缺少 hash。');
         }
+        if (! $this->isRuntimeHash($hash)) {
+            return $this->toolError('hash 格式非法,必须是 12 位小写十六进制。');
+        }
 
         // 模型常把 boolean 送成字符串("false"/"no"),(bool) 强转会变 true → 敏感 payload
         // 意外带出;filter_var 按语义解析,解析不了的怪值按 false 安全侧处理(2026-06-11 修)
@@ -346,6 +349,9 @@ class CloudMcpCommand extends Command
         $hash = trim((string) ($args['hash'] ?? ''));
         if ($hash === '') {
             return $this->toolError('缺少 hash。');
+        }
+        if (! $this->isRuntimeHash($hash)) {
+            return $this->toolError('hash 格式非法,必须是 12 位小写十六进制。');
         }
 
         $r = $this->cloud->resolveRuntime(
@@ -495,5 +501,10 @@ class CloudMcpCommand extends Command
     private function jsonText(mixed $v): string
     {
         return (string) json_encode($v, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    }
+
+    private function isRuntimeHash(string $hash): bool
+    {
+        return preg_match('/^[a-f0-9]{12}$/', $hash) === 1;
     }
 }

@@ -172,7 +172,7 @@ class SqlSlowRecorder
         string $now
     ): array {
         // sql_last 含 binding 替换后的真实值,可能带密钥(WHERE token='…')→ 值侧脱敏后再落盘/上云。
-        $maskedLast = $this->maskSensitiveSql($sqlLast);
+        $maskedLast = $this->maskSecrets($this->maskSensitiveSql($sqlLast));
 
         return [
             'hash'          => $hash,
@@ -214,7 +214,7 @@ class SqlSlowRecorder
         ?Request $request,
         string $now
     ): array {
-        $maskedLast                    = $this->maskSensitiveSql($sqlLast);
+        $maskedLast                    = $this->maskSecrets($this->maskSensitiveSql($sqlLast));
         $existing['last_seen']         = $now;
         $existing['count']             = (int) ($existing['count'] ?? 0) + 1;
         $existing['sql']['last']       = $this->truncate($maskedLast, 4096);

@@ -95,14 +95,15 @@ class CloudClient
                 ->asJson()
                 ->post($url, ['token' => $this->token, 'records' => array_values($records)]);
 
-            $body = (array) ($resp->json() ?? []);
-            $ok   = $resp->successful() && ($body['ok'] ?? false) === true;
+            $body  = (array) ($resp->json() ?? []);
+            $saved = array_key_exists('saved', $body) ? (int) $body['saved'] : count($records);
+            $ok    = $resp->successful() && ($body['ok'] ?? false) === true && $saved === count($records);
 
             return [
                 'ok'     => $ok,
                 'status' => $resp->status(),
-                'saved'  => (int) ($body['saved'] ?? 0),
-                'error'  => $ok ? null : (string) ($body['error'] ?? ('HTTP ' . $resp->status())),
+                'saved'  => $saved,
+                'error'  => $ok ? null : (string) ($body['error'] ?? ($resp->successful() ? "saved {$saved}/" . count($records) : ('HTTP ' . $resp->status()))),
             ];
         } catch (Throwable $e) {
             return ['ok' => false, 'status' => 0, 'saved' => 0, 'error' => $e->getMessage()];

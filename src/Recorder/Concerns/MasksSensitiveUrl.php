@@ -67,7 +67,9 @@ trait MasksSensitiveUrl
             . '(?:=|!=|<>|>=|<=|>|<|\bLIKE\b|\bIN\b)\s*)'
             . '(\'(?:[^\'\\\\]|\\\\.)*\'|"(?:[^"\\\\]|\\\\.)*"|\([^)]*\)|[0-9.]+)/i';
 
-        return preg_replace($pattern, '$1***', $text) ?? $text;
+        $text = preg_replace($pattern, '$1***', $text) ?? $text;
+
+        return $this->maskInsertValues($text);
     }
 
     /**
@@ -81,6 +83,8 @@ trait MasksSensitiveUrl
             return $text;
         }
 
+        // Authorization: Basic xxx / Authorization=Bearer xxx 等完整头值脱敏。
+        $text = preg_replace('/(\bauthorization\s*[:=]\s*)(?:Bearer|Basic|Digest)?\s*[^\s"\',&;]+/i', '$1***', $text) ?? $text;
         // ① JWT(三段 base64url)
         $text = preg_replace('/eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+/', '***JWT***', $text) ?? $text;
         // ② Bearer <token>
@@ -113,5 +117,100 @@ trait MasksSensitiveUrl
         }
 
         return false;
+    }
+
+    private function maskInsertValues(string $text): string
+    {
+        $quoted = '\'(?:[^\'\\\\]|\\\\.)*\'|"(?:[^"\\\\]|\\\\.)*"';
+        $tuple  = '\((?:' . $quoted . '|[^()])*\)';
+
+        return preg_replace_callback(
+            '/(\binsert\s+into\b[^(]*\()([^)]*)(\)\s*values\s*)((?:\s*' . $tuple . '\s*,?)*)/i',
+            function (array $m) use ($tuple): string {
+                $columns = $this->splitSqlList($m[2]);
+                if ($columns === []) {
+                    return $m[0];
+                }
+
+                $maskIndexes = [];
+                foreach ($columns as $i => $column) {
+                    if ($this->shouldMaskKey($this->cleanSqlIdentifier($column))) {
+                        $maskIndexes[$i] = true;
+                    }
+                }
+                if ($maskIndexes === []) {
+                    return $m[0];
+                }
+
+                $tuples = preg_replace_callback('/' . $tuple . '/', function (array $tupleMatch) use ($maskIndexes): string {
+                    $inner  = substr($tupleMatch[0], 1, -1);
+                    $values = $this->splitSqlList($inner);
+                    foreach ($maskIndexes as $i => $_) {
+                        if (array_key_exists($i, $values)) {
+                            $values[$i] = '***';
+                        }
+                    }
+
+                    return '(' . implode(', ', $values) . ')';
+                }, $m[4]) ?? $m[4];
+
+                return $m[1] . $m[2] . $m[3] . $tuples;
+            },
+            $text
+        ) ?? $text;
+    }
+
+    private function splitSqlList(string $list): array
+    {
+        $out     = [];
+        $buf     = '';
+        $quote   = null;
+        $escaped = false;
+        $len     = strlen($list);
+
+        for ($i = 0; $i < $len; $i++) {
+            $ch = $list[$i];
+            if ($quote !== null) {
+                $buf .= $ch;
+                if ($escaped) {
+                    $escaped = false;
+                } elseif ($ch === '\\') {
+                    $escaped = true;
+                } elseif ($ch === $quote) {
+                    $quote = null;
+                }
+
+                continue;
+            }
+            if ($ch === '\'' || $ch === '"') {
+                $quote = $ch;
+                $buf .= $ch;
+
+                continue;
+            }
+            if ($ch === ',') {
+                $out[] = trim($buf);
+                $buf   = '';
+
+                continue;
+            }
+            $buf .= $ch;
+        }
+        if (trim($buf) !== '' || $list !== '') {
+            $out[] = trim($buf);
+        }
+
+        return $out;
+    }
+
+    private function cleanSqlIdentifier(string $identifier): string
+    {
+        $identifier = trim($identifier);
+        if (str_contains($identifier, '.')) {
+            $parts      = explode('.', $identifier);
+            $identifier = (string) end($parts);
+        }
+
+        return trim($identifier, " \t\n\r\0\x0B`\"[]");
     }
 }

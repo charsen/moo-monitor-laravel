@@ -35,9 +35,8 @@ class CloudPushCommand extends Command
 
     public function handle(): int
     {
-        $this->warnLegacyEnv();
-
         $cfg = (array) config('moo-monitor.cloud', []);
+        $this->warnLegacyEnv($cfg);
 
         if (! ($cfg['enabled'] ?? false)) {
             $this->warn('cloud 推送未启用（MOO_MONITOR_CLOUD_ENABLED=false），跳过。');
@@ -107,12 +106,32 @@ class CloudPushCommand extends Command
     /**
      * scaffold ≤3.8 时代的 SCAFFOLD_CLOUD_* env 已更名 MOO_MONITOR_CLOUD_*,不做兼容回落。
      * 检测到旧名已配、新名为空时提示一次,帮存量宿主定位「升级后推送突然没配置」的原因。
+     *
+     * @param array<string,mixed> $cfg
      */
-    private function warnLegacyEnv(): void
+    private function warnLegacyEnv(array $cfg): void
     {
-        if (env('SCAFFOLD_CLOUD_TOKEN') !== null && (string) env('MOO_MONITOR_CLOUD_TOKEN', '') === '') {
+        if ($this->rawEnv('SCAFFOLD_CLOUD_TOKEN') !== null && (string) ($cfg['token'] ?? '') === '') {
             $this->warn('检测到旧配置 SCAFFOLD_CLOUD_*：moo-monitor-laravel 使用 MOO_MONITOR_CLOUD_* 命名,');
             $this->warn('旧变量不再生效,请在 .env 中改名(对照表见 moo-monitor-laravel README)。');
         }
+    }
+
+    private function rawEnv(string $key): ?string
+    {
+        if (array_key_exists($key, $_ENV)) {
+            $value = (string) $_ENV[$key];
+
+            return $value === '' ? null : $value;
+        }
+        if (array_key_exists($key, $_SERVER)) {
+            $value = (string) $_SERVER[$key];
+
+            return $value === '' ? null : $value;
+        }
+
+        $value = getenv($key);
+
+        return $value === false || $value === '' ? null : $value;
     }
 }
