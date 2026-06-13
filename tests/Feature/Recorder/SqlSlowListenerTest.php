@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Mooeen\Monitor\Tests\Feature\Recorder;
 
+use DateTimeImmutable;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Support\Facades\Http;
 use Mooeen\Monitor\Recorder\SqlSlowListener;
@@ -139,6 +140,37 @@ class SqlSlowListenerTest extends TestCase
         // sql.last 含 binding 替换后的字面值 + 完整 DATE_FORMAT 字面量
         $this->assertStringContainsString('%Y-%m-%d', $data['sql']['last']);
         $this->assertStringContainsString('42', $data['sql']['last']);
+    }
+
+    public function test_binding_replace_ignores_question_marks_inside_bound_values(): void
+    {
+        $this->listener->handle($this->fakeEvent(
+            'select * from `t` where `keyword` = ? and `id` = ?',
+            ['what?', 42],
+            200.0
+        ));
+
+        $rows = $this->recorder->list('open');
+        $this->assertNotEmpty($rows);
+
+        $data = $this->recorder->get($rows[0]['hash']);
+        $this->assertStringContainsString("`keyword` = 'what?'", $data['sql']['last']);
+        $this->assertStringContainsString('`id` = 42', $data['sql']['last']);
+    }
+
+    public function test_binding_replace_accepts_datetime_immutable(): void
+    {
+        $this->listener->handle($this->fakeEvent(
+            'select * from `t` where `created_at` > ?',
+            [new DateTimeImmutable('2026-06-13 08:09:10')],
+            200.0
+        ));
+
+        $rows = $this->recorder->list('open');
+        $this->assertNotEmpty($rows);
+
+        $data = $this->recorder->get($rows[0]['hash']);
+        $this->assertStringContainsString("'2026-06-13 08:09:10'", $data['sql']['last']);
     }
 
     public function test_yaml_records_original_bytes_for_truncation_judgement(): void

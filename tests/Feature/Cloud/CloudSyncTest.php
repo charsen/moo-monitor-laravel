@@ -185,6 +185,22 @@ it('坏 yaml 文件被跳过,不阻断整体', function () {
     expect($r['ok'])->toBeTrue()->and($r['pushed'])->toBe(1); // 只有合法那条
 });
 
+it('推送以文件名 hash 为准,跳过非法文件名', function () {
+    Http::fake(['*' => Http::response(['ok' => true, 'saved' => 1])]);
+
+    $dir = storage_path('moo-monitor/runtimes/open');
+    @mkdir($dir, 0755, true);
+    file_put_contents($dir . '/aaaaaaaaaaaa.yaml', "hash: bbbbbbbbbbbb\nlast_seen: '" . now()->toIso8601String() . "'\ncount: 1\n");
+    file_put_contents($dir . '/ABCDEF123456.yaml', "hash: ABCDEF123456\nlast_seen: '" . now()->toIso8601String() . "'\ncount: 1\n");
+
+    $r = (new CloudSync($this->cursor))->sync('runtimes');
+
+    expect($r['ok'])->toBeTrue()
+        ->and($r['changed'])->toBe(1)
+        ->and($r['pushed'])->toBe(1);
+    Http::assertSent(fn ($request) => ($request['records'][0]['hash'] ?? null) === 'aaaaaaaaaaaa');
+});
+
 it('无 updated_at/last_seen 的 legacy 记录:推一次后游标越过,不再重推(mtime 兜底,2026-06-09 修)', function () {
     Http::fake(['*' => Http::response(['ok' => true, 'saved' => 1])]);
 
@@ -204,6 +220,26 @@ it('无 updated_at/last_seen 的 legacy 记录:推一次后游标越过,不再�
     expect($second['pushed'])->toBe(0);
 
     Http::assertSentCount(1);
+});
+
+it('增量读取以 yaml 时间戳为准,不因旧 mtime 漏推', function () {
+    Http::fake(['*' => Http::response(['ok' => true, 'saved' => 1])]);
+
+    $cursor = now();
+    file_put_contents($this->cursor, json_encode(['runtimes' => $cursor->toIso8601String()]));
+
+    $dir = storage_path('moo-monitor/runtimes/open');
+    @mkdir($dir, 0755, true);
+    $file = $dir . '/fedcba987654.yaml';
+    file_put_contents($file, "hash: fedcba987654\nstatus: open\nlast_seen: '" . $cursor->copy()->addMinute()->toIso8601String() . "'\nmeta:\n  updated_at: '" . $cursor->copy()->addMinute()->toIso8601String() . "'\n");
+    touch($file, time() - 86400 * 30);
+
+    $r = (new CloudSync($this->cursor))->sync('runtimes');
+
+    expect($r['ok'])->toBeTrue()
+        ->and($r['changed'])->toBe(1)
+        ->and($r['pushed'])->toBe(1);
+    Http::assertSent(fn ($request) => ($request['records'][0]['hash'] ?? null) === 'fedcba987654');
 });
 
 it('writeState:先推 runtimes 再推 slow_sql,两个游标都保留(read-modify-write 不互覆盖)', function () {
@@ -266,6 +302,21 @@ it('pruneLocal:resolved 但晚于游标(push 后才 resolve、未上云)→ 不�
 
     expect($res['purged'])->toBe(0)
         ->and(is_file(storage_path('moo-monitor/runtimes/resolved/bbbbbbbbbbbb.yaml')))->toBeTrue(); // 未上云 → 留着
+});
+
+it('pruneLocal:resolved 判断以上云游标为准,不信旧 mtime 快删', function () {
+    file_put_contents($this->cursor, json_encode(['runtimes' => now()->subHour()->toIso8601String()]));
+
+    $dir = storage_path('moo-monitor/runtimes/resolved');
+    @mkdir($dir, 0755, true);
+    $file = $dir . '/eeeeeeeeeeee.yaml';
+    file_put_contents($file, "hash: eeeeeeeeeeee\nstatus: resolved\nlast_seen: '" . now()->toIso8601String() . "'\nmeta:\n  updated_at: '" . now()->toIso8601String() . "'\n");
+    touch($file, time() - 86400 * 30);
+
+    $res = (new CloudSync($this->cursor))->pruneLocal('runtimes', 7);
+
+    expect($res['purged'])->toBe(0)
+        ->and(is_file($file))->toBeTrue();
 });
 
 it('pruneLocal:无游标(从未成功推过)→ resolved 一律不删', function () {

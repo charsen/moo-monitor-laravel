@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Mooeen\Monitor\Recorder;
 
-use DateTime;
+use DateTimeInterface;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -65,26 +65,38 @@ class SqlSlowListener
      */
     private function fillBindings(string $sql, array $bindings): string
     {
-        foreach ($bindings as $i => $b) {
-            if ($b instanceof DateTime) {
-                $bindings[$i] = "'" . $b->format('Y-m-d H:i:s') . "'";
-            } elseif (is_string($b)) {
-                $bindings[$i] = "'" . $b . "'";
-            } elseif (is_bool($b)) {
-                $bindings[$i] = $b ? '1' : '0';
-            } elseif (is_null($b)) {
-                $bindings[$i] = 'NULL';
-            }
-        }
-        foreach ($bindings as $b) {
-            $pos = strpos($sql, '?');
-            if ($pos === false) {
-                break;
-            }
-            $sql = substr_replace($sql, (string) $b, $pos, 1);
+        $parts = explode('?', $sql);
+        if (count($parts) === 1) {
+            return $sql;
         }
 
-        return $sql;
+        $out = array_shift($parts);
+        foreach ($parts as $i => $part) {
+            $out .= array_key_exists($i, $bindings)
+                ? $this->formatBinding($bindings[$i])
+                : '?';
+            $out .= $part;
+        }
+
+        return $out;
+    }
+
+    private function formatBinding(mixed $binding): string
+    {
+        if ($binding instanceof DateTimeInterface) {
+            return "'" . $binding->format('Y-m-d H:i:s') . "'";
+        }
+        if (is_string($binding)) {
+            return "'" . $binding . "'";
+        }
+        if (is_bool($binding)) {
+            return $binding ? '1' : '0';
+        }
+        if ($binding === null) {
+            return 'NULL';
+        }
+
+        return (string) $binding;
     }
 
     /**

@@ -78,7 +78,11 @@ trait ManagesBucketedRecords
         foreach ($buckets as $bucket) {
             $dir = $this->basePath . '/' . $bucket;
             if (is_dir($dir)) {
-                $n += count(glob($dir . '/*.yaml') ?: []);
+                foreach (glob($dir . '/*.yaml') ?: [] as $file) {
+                    if ($this->isValidHash(basename($file, '.yaml'))) {
+                        $n++;
+                    }
+                }
             }
         }
 
@@ -118,7 +122,7 @@ trait ManagesBucketedRecords
     {
         // hash 必 [a-f0-9]{12}。任何非法字符(/, .., null byte)直接丢 InvalidArgumentException —— 防 path
         // traversal(authed user 也不能漂出桶根)。CLI 命令(moo:*:prune)也走这层,enforcement 必须在此。
-        if (! preg_match('/^[a-f0-9]{12}$/', $hash)) {
+        if (! $this->isValidHash($hash)) {
             throw new \InvalidArgumentException('invalid record hash: ' . $hash);
         }
 
@@ -174,6 +178,9 @@ trait ManagesBucketedRecords
             }
             foreach (glob($dir . '/*.yaml') ?: [] as $file) {
                 $hash = basename($file, '.yaml');
+                if (! $this->isValidHash($hash)) {
+                    continue;
+                }
                 $data = $this->readFile($hash, $bucket);
                 if ($data === null) {
                     continue;
@@ -207,6 +214,11 @@ trait ManagesBucketedRecords
         }
 
         return $abs;
+    }
+
+    protected function isValidHash(string $hash): bool
+    {
+        return preg_match('/^[a-f0-9]{12}$/', $hash) === 1;
     }
 
     protected function nowIso(): string
