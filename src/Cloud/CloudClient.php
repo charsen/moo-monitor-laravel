@@ -95,8 +95,11 @@ class CloudClient
                 ->asJson()
                 ->post($url, ['token' => $this->token, 'records' => array_values($records)]);
 
-            $body  = (array) ($resp->json() ?? []);
-            $saved = array_key_exists('saved', $body) ? (int) $body['saved'] : count($records);
+            $body = (array) ($resp->json() ?? []);
+            // 契约:saved 必须等于 records.length,否则整批视为失败、游标不前进。saved 缺席时用 -1 哨兵
+            // (records 非空,见上方提前返回 → -1 永不等于 count)→ ok=false → 不前进游标 → 下轮幂等重推。
+            // 不能乐观默认成 count(records):那会在「无法确认云端到底存了几条」时仍前进游标并回收本地 = 丢数据。
+            $saved = array_key_exists('saved', $body) ? (int) $body['saved'] : -1;
             $ok    = $resp->successful() && ($body['ok'] ?? false) === true && $saved === count($records);
 
             return [

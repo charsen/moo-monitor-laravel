@@ -108,6 +108,24 @@ class CloudClientTest extends TestCase
         $this->assertSame('saved 1/2', $r['error']);
     }
 
+    public function test_send_treats_missing_saved_field_as_failure(): void
+    {
+        // 审查 #10:云端 2xx + ok:true 但缺 saved 字段时,不能乐观默认成「全部成功」前进游标(=丢数据)。
+        // 缺字段 → saved=-1(records 非空,永不等于 count)→ ok=false → 不前进游标 → 下轮幂等重推。
+        $this->configureCloud();
+        Http::fake([
+            'cloud.test/api/v1/runtimes/intake' => Http::response(['ok' => true], 200),
+        ]);
+
+        $r = (new CloudClient)->send(CloudClient::PATH_RUNTIMES, [
+            ['hash' => 'aaaaaaaaaaaa'],
+            ['hash' => 'bbbbbbbbbbbb'],
+        ]);
+
+        $this->assertFalse($r['ok']);
+        $this->assertSame(-1, $r['saved']);
+    }
+
     // ---- runtime 读/写(供 moo:cloud:mcp) ----------------------------------
 
     public function test_fetch_runtimes_hits_list_with_token_and_filters(): void

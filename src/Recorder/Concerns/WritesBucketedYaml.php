@@ -19,7 +19,7 @@ use Symfony\Component\Yaml\Yaml;
  */
 trait WritesBucketedYaml
 {
-    private function writeFile(string $key, string $bucket, array $data): bool
+    private function writeFile(string $key, string $bucket, array $data, bool $isNew = false): bool
     {
         // 写盘前刷 meta.updated_at,让 ScaffoldMergeYamlCommand 在多端 push 冲突时 last-write-wins 合并
         $data['meta'] = array_merge($data['meta'] ?? [], ['updated_at' => $this->nowIso()]);
@@ -43,7 +43,12 @@ trait WritesBucketedYaml
                 @unlink($tmp);   // rename 失败(跨设备等罕见)→ 清理临时文件,原文件保持不动
             }
         }
-        $this->forgetOpenCountCache();
+        // 只有「新建文件」才改变 open 桶文件数 → 才需让 open 数缓存失效。
+        // refresh 覆盖同名已存在文件不改变桶内文件数,在热点路径上 forget 是纯多余动作 ——
+        // 多 worker 并发下任一进程一写就清缓存,会让所有进程的下一次新建都得 glob 整个 open 桶。
+        if ($ok && $isNew) {
+            $this->forgetOpenCountCache();
+        }
 
         return $ok;
     }
@@ -69,6 +74,21 @@ trait WritesBucketedYaml
         return $this->readFile($key, 'open')
             ?? $this->readFile($key, 'resolved')
             ?? $this->readFile($key, 'deleted');
+    }
+
+    /**
+     * 返回该 hash 实际落在哪个桶(open → resolved → deleted 优先序),都不在返 null。
+     * record() 用它判定复发应从哪个桶搬回 open —— 比读 yaml 内 status 字段更可靠(桶目录是 status 真源)。
+     */
+    private function findBucket(string $key): ?string
+    {
+        foreach (['open', 'resolved', 'deleted'] as $bucket) {
+            if (is_file($this->path($key, $bucket))) {
+                return $bucket;
+            }
+        }
+
+        return null;
     }
 
     private function countOpen(): int

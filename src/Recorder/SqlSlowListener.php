@@ -6,7 +6,7 @@ namespace Mooeen\Monitor\Recorder;
 
 use DateTimeInterface;
 use Illuminate\Database\Events\QueryExecuted;
-use Illuminate\Support\Facades\Log;
+use Mooeen\Monitor\Concerns\SafelyLogs;
 use Throwable;
 
 /**
@@ -20,6 +20,8 @@ use Throwable;
  */
 class SqlSlowListener
 {
+    use SafelyLogs;
+
     public function __construct(private SqlSlowRecorder $recorder) {}
 
     public function handle(QueryExecuted $event): void
@@ -54,8 +56,10 @@ class SqlSlowListener
                 line: (int) ($frame['line'] ?? 0),
             );
         } catch (Throwable $e) {
-            // listener 自身不能抛 — 业务请求不能因慢 SQL 上报失败而 500
-            Log::warning('sql-slow-listener failed: ' . $e->getMessage());
+            // listener 自身不能抛 — 业务请求不能因慢 SQL 上报失败而 500。
+            // 用 safeLog:日志写入本身也可能抛(database/slack 通道后端不可用),否则会逃出 handle()
+            // → 逃出 Connection::logQuery() → 把一次已成功的查询变成抛异常。
+            $this->safeLog('warning', 'sql-slow-listener failed: ' . $e->getMessage());
         }
     }
 

@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Mooeen\Monitor;
 
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Log;
+use Mooeen\Monitor\Concerns\SafelyLogs;
 use Mooeen\Monitor\Recorder\RuntimeErrorRecorder;
 use Throwable;
 use WeakMap;
@@ -23,6 +23,8 @@ use WeakMap;
  */
 class ExceptionDispatcher
 {
+    use SafelyLogs;
+
     /**
      * 本进程内已分发过的异常对象。auto_hook 与宿主手动 reportable 接入并存时,同一异常对象
      * 会进来两次 —— 用 WeakMap(而非 spl_object_id 数组)防双计:对象被 GC 后条目自动消失,
@@ -37,27 +39,39 @@ class ExceptionDispatcher
 
     public function dispatch(Throwable $e, ?Request $request = null): void
     {
+        // 防双计的 WeakMap 标记放在 try 之前:它必须先生效(否则抛错-重试会双计),
+        // 且 isset/赋值本身不会抛。其余主体全部进 try —— request()/config()/跳过判断都要从容器
+        // 解析服务,而异常上报正发生在容器/请求状态不一定健康的时刻,任一处抛错都会冒泡进宿主
+        // 的 reportable 链、顶替掉 renderException(MonitorProvider 把 dispatch 无保护地挂了上去)。
         if (isset($this->dispatched[$e])) {
             return;
         }
         $this->dispatched[$e] = true;
 
-        $request ??= function_exists('request') ? request() : null;
+        try {
+            $request ??= function_exists('request') ? request() : null;
 
-        if (! (bool) config('moo-monitor.runtime.enabled', true)) {
-            return;
+            if (! (bool) config('moo-monitor.runtime.enabled', true)) {
+                return;
+            }
+
+            if ((bool) config('moo-monitor.exception.cli_experiment_skip', true) && $this->isCliExperiment($e)) {
+                return;
+            }
+
+            if ((bool) config('moo-monitor.exception.console_input_skip', true) && $this->isConsoleInputError($e)) {
+                return;
+            }
+
+            // 仅落盘;邮件/钉钉/企微通知由云端在 intake 时触发。
+            $this->dispatchRuntime($e, $request);
+        } catch (Throwable $self) {
+            // 兜底:dispatch 对宿主的硬保证是「永不抛」。safeLog 自身也绝不抛(日志后端可能正不可用)。
+            $this->safeLog('error', 'exception-dispatcher failed: ' . $self->getMessage(), [
+                'origin_class' => get_class($e),
+                'origin_at'    => $e->getFile() . ':' . $e->getLine(),
+            ]);
         }
-
-        if ((bool) config('moo-monitor.exception.cli_experiment_skip', true) && $this->isCliExperiment($e)) {
-            return;
-        }
-
-        if ((bool) config('moo-monitor.exception.console_input_skip', true) && $this->isConsoleInputError($e)) {
-            return;
-        }
-
-        // 仅落盘;邮件/钉钉/企微通知由云端在 intake 时触发。
-        $this->dispatchRuntime($e, $request);
     }
 
     private function dispatchRuntime(Throwable $e, ?Request $request): void
@@ -66,7 +80,7 @@ class ExceptionDispatcher
             // 落盘失败的诊断由 RuntimeErrorRecorder 自己记(它才分得清「写失败」与「按规则跳过」)。
             app(RuntimeErrorRecorder::class)->record($e, $request);
         } catch (Throwable $self) {
-            Log::error('exception-dispatcher runtime channel failed: ' . $self->getMessage(), [
+            $this->safeLog('error', 'exception-dispatcher runtime channel failed: ' . $self->getMessage(), [
                 'origin_class' => get_class($e),
                 'origin_at'    => $e->getFile() . ':' . $e->getLine(),
             ]);

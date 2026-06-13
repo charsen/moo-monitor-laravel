@@ -73,6 +73,14 @@ class CloudPushCommand extends Command
             } elseif (! $r['ok']) {
                 $status = '失败：' . $r['error'];
                 $failed = true;
+                // 失败批的 hash 列出来:某条被云端持久拒收会卡死整类游标(每分钟重推同一批又失败),
+                // 本地缓冲只增不减。运维据此定位毒记录:storage/moo-monitor/<type>/open|resolved/<hash>.yaml。
+                $hashes = $r['failed_hashes'] ?? [];
+                if ($hashes !== []) {
+                    $shown = array_slice($hashes, 0, 10);
+                    $more  = count($hashes) > count($shown) ? ' 等 ' . count($hashes) . ' 条' : '';
+                    $this->warn("[{$t}] 卡住的记录 hash：" . implode(', ', $shown) . $more . '(游标不前进,本地缓冲将累积)');
+                }
             } elseif ($dryRun) {
                 $status = '待推 ' . $r['changed'] . ' 条（dry-run）';
             } else {

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Mooeen\Monitor\Recorder;
 
 use Illuminate\Http\Request;
+use Mooeen\Monitor\Concerns\SafelyLogs;
 use Mooeen\Monitor\Recorder\Concerns\ManagesBucketedRecords;
 use Mooeen\Monitor\Recorder\Concerns\MasksSensitiveUrl;
 use Mooeen\Monitor\Recorder\Concerns\TracksDailyCap;
@@ -25,6 +26,7 @@ class SqlSlowRecorder
 {
     use ManagesBucketedRecords;
     use MasksSensitiveUrl;
+    use SafelyLogs;
     use TracksDailyCap;
     use WritesBucketedYaml;
 
@@ -65,12 +67,16 @@ class SqlSlowRecorder
 
         try {
             $request ??= function_exists('request') ? request() : null;
-            $hash     = $this->makeHash($sqlRaw, $file, $line);
-            $existing = $this->find($hash);
+            $hash = $this->makeHash($sqlRaw, $file, $line);
+            // 用记录实际所在桶判定(桶目录是 status 真源),而非 yaml 内 status 字段。
+            $bucket   = $this->findBucket($hash);
+            $existing = $bucket !== null ? $this->readFile($hash, $bucket) : null;
             $now      = $this->nowIso();
+            $isNew    = false;
 
-            if ($existing && ($existing['status'] ?? 'open') === 'resolved') {
-                $this->moveFile($hash, 'resolved', 'open');
+            if ($existing && $bucket !== 'open') {
+                // resolved / deleted 桶里的同 hash 复发 → 搬回 open 复活(之前 deleted 漏处理会留跨桶重复)。
+                $this->moveFile($hash, $bucket, 'open');
                 $existing['status']        = 'open';
                 $existing['resolved_at']   = null;
                 $existing['resolved_by']   = null;
@@ -84,14 +90,15 @@ class SqlSlowRecorder
                 }
                 $data = $this->refresh($existing, $sqlLast, $tookMs, $file, $line, $request, $now);
             } else {
-                if ($this->cachedOpenCount() >= (int) ($this->config['max_open'] ?? 500)) {
+                if ($this->openBucketFull()) {
                     return null;
                 }
-                $data = $this->build($hash, $sqlRaw, $sqlLast, $tookMs, $file, $line, $request, $now);
+                $data  = $this->build($hash, $sqlRaw, $sqlLast, $tookMs, $file, $line, $request, $now);
+                $isNew = true;
             }
 
             $this->ensureDir();
-            if (! $this->writeFile($hash, 'open', $data)) {
+            if (! $this->writeFile($hash, 'open', $data, $isNew)) {
                 $this->logWriteFailure($file, $line, $request);
 
                 return null;
@@ -99,9 +106,9 @@ class SqlSlowRecorder
 
             return $hash;
         } catch (Throwable $self) {
-            if (function_exists('app')) {
-                app('log')->warning('sql-slow-recorder failed: ' . $self->getMessage());
-            }
+            // safeLog:日志写入本身也可能抛(database/slack 通道后端不可用),否则会逃出 record()
+            // → 经 SqlSlowListener 冒泡进宿主查询执行。record() 对调用方只返回 string|null,永不抛。
+            $this->safeLog('warning', 'sql-slow-recorder failed: ' . $self->getMessage());
 
             return null;
         }
@@ -114,20 +121,21 @@ class SqlSlowRecorder
     private function logWriteFailure(string $file, int $line, ?Request $request): void
     {
         static $logged = false;
-        if ($logged || ! function_exists('app')) {
+        if ($logged) {
             return;
         }
         $logged = true;
 
         $openDir = $this->basePath . '/open';
-        app('log')->error('sql-slow-recorder: 写盘失败(目录不可写?) ' . $openDir, [
+        // url 走 maskUrl,避免把 ?token=/api_key= 明文写进宿主 laravel.log(同 RuntimeErrorRecorder)。
+        $this->safeLog('error', 'sql-slow-recorder: 写盘失败(目录不可写?) ' . $openDir, [
             'is_dir'   => is_dir($openDir),
             'writable' => is_writable(is_dir($openDir) ? $openDir : dirname($openDir)),
             'perms'    => is_dir($openDir) ? substr(sprintf('%o', (int) @fileperms($openDir)), -4) : null,
             'owner'    => is_dir($openDir) ? @fileowner($openDir) : null,
             'php_uid'  => function_exists('posix_geteuid') ? posix_geteuid() : null,
             'origin'   => $file . ':' . $line,
-            'url'      => $request?->fullUrl(),
+            'url'      => $request !== null ? $this->maskUrl($request->fullUrl()) : null,
         ]);
     }
 

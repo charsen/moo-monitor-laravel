@@ -2,12 +2,31 @@
 
 `moo-monitor-laravel` 版本变更记录,按 [Keep a Changelog](https://keepachangelog.com/) + [SemVer](https://semver.org/) 风格。
 
+## [Unreleased]
+
+阶段性业务代码审查与加固(多维度评审 + 对抗复核,确认 16 项;测试 100 → 110)。
+
+### Fixed
+
+- **失败隔离(核心不变量)**:异常分发 / 慢 SQL 监听 / 落盘的兜底日志写入统一走绝不抛错的 `SafelyLogs::safeLog`,并把 `ExceptionDispatcher::dispatch()` 整个主体纳入兜底 —— 修复「日志后端(database/slack 等)在异常上报时不可用 → 写日志自身抛错 → 冒泡进宿主异常链(白屏)/ 查询执行(成功查询变抛错)」。
+- **密钥泄露**:写盘失败的诊断日志改用 `maskUrl` 脱敏请求 URL,不再把 `?token=` / `?api_key=` 明文写进宿主 `laravel.log`。
+- **数据损坏**:payload 字符串截断改为字符级 `mb_substr` + 非负长度,中文/emoji 不再被字节切断成非法 UTF-8 而被 yaml 当二进制 base64 编码;`string_truncate < 20` 不再反向放大输出。
+- **聚合不变量**:`deleted` 桶里的同 hash 复发时从其实际所在桶搬回 `open` 复活,消除「同 hash 同时存在两桶」的跨桶重复。
+- **契约健壮性**:云端响应缺失 `saved` 字段时按整批失败处理(fail-closed),不再乐观前进游标导致丢数据。
+- **采集准确性**:`max_open` 写盘闸在缓存判「满」时实测复核一次,避免 prune / migrate 等外部减量后缓存陈旧误判桶满、静默丢弃新 hash。
+- **脱敏一致性**:`trace.full` 补 `maskSensitiveSql`,与 `exception.message` 的脱敏强度对齐。
+
+### Changed
+
+- 推送失败时输出卡住的记录 hash(`moo:cloud:push` 打印 + 后台调度写日志):单条被云端持久拒收的记录会卡住整类游标并使本地缓冲累积,现在可被发现与定位。
+- `open` 数缓存仅在「新建文件」时失效,刷新已有记录的热点路径不再无谓清缓存。
+- README 补 `MOO_MONITOR_CLOUD_TIMEOUT` / `VERIFY` / `SCHEDULE` 配置项与「推送一直失败」排障章节;`ManagesBucketedRecords` 注明并发下 `count` 为 best-effort 近似值。
+
 ## [0.1.2] — 2026-06-13
 
 ### Added
 
 - 重写 README,补充业务功能、安装接入、云端推送、MCP 和迁移说明。
-- 新增 GitHub Actions CI,覆盖 Composer 校验、Pint、Larastan/PHPStan 和 Pest。
 - 新增 `SECURITY.md` 与云端 API 契约文档。
 
 ### Fixed
@@ -22,8 +41,12 @@
 
 ### Changed
 
-- 新增 Composer 维护脚本:`check:composer`、`lint`、`format`、`analyse`、`quality`。
+- 新增 Composer 维护脚本:`check:composer`、`lint`、`format`、`quality`。
 - 测试扩展到 100 个用例,覆盖云端同步、MCP、存储边界和脱敏回归。
+
+### Removed
+
+- 移除 Larastan / PHPStan 与 GitHub Actions CI(及 `analyse` 脚本):质量门禁完全依赖 Pest 用例覆盖。
 
 ## [0.1.1] — 2026-06-12
 
