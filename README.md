@@ -111,7 +111,15 @@ config/moo-monitor.php
 php artisan config:clear
 ```
 
-查看本地是否有待推送数据：
+**推荐:一键自检。** 不用等真异常发生,直接推一条 runtime + 一条慢 SQL 到云端,逐步确认配置是否有效：
+
+```bash
+php artisan moo:cloud:test
+```
+
+输出会逐项反馈:配置检查 → 心跳(连通 + 鉴权)→ 推送自检 runtime → 推送自检慢 SQL。全绿即说明「采集 → 推送 → 云端」整条管道通畅。自检记录是可识别的(runtime 类名 `SelfTestException`、SQL 带 `self-test` 标记),默认保留为「未处理」,这样你能去云端 runtimes / slow_queries 列表**亲眼确认数据已到达**;确认后在 UI 解决即可,或加 `--resolve` 让命令推送后自动标记已解决。重复运行只 upsert 同一条,不会堆积。
+
+也可以用既有方式手动验证 —— 查看本地是否有待推送数据：
 
 ```bash
 php artisan moo:cloud:push --dry-run
@@ -169,6 +177,7 @@ php artisan moo:cloud:push
 
 | 命令 | 说明 |
 | --- | --- |
+| `php artisan moo:cloud:test` | 自检:推一条 runtime + 一条慢 SQL 到云端,确认接入配置有效。 |
 | `php artisan moo:cloud:push` | 推送 runtime 异常和慢 SQL 到云端。 |
 | `php artisan moo:cloud:push --dry-run` | 只统计待推送数量，不发送请求。 |
 | `php artisan moo:cloud:push --type=runtimes` | 只推送运行时异常。 |

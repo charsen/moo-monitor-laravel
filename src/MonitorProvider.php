@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use Mooeen\Monitor\Command\CloudMcpCommand;
 use Mooeen\Monitor\Command\CloudPushCommand;
+use Mooeen\Monitor\Command\CloudTestCommand;
 use Mooeen\Monitor\Command\MigrateCommand;
 use Mooeen\Monitor\Recorder\RuntimeErrorRecorder;
 use Mooeen\Monitor\Recorder\SqlSlowListener;
@@ -76,6 +77,7 @@ class MonitorProvider extends ServiceProvider
             $this->commands([
                 CloudPushCommand::class,
                 CloudMcpCommand::class,
+                CloudTestCommand::class,
                 MigrateCommand::class,
             ]);
         }

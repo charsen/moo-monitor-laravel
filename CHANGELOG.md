@@ -2,9 +2,13 @@
 
 `moo-monitor-laravel` 版本变更记录,按 [Keep a Changelog](https://keepachangelog.com/) + [SemVer](https://semver.org/) 风格。
 
-## [Unreleased]
+## [0.1.3] — 2026-06-14
 
-阶段性业务代码审查与加固(多维度评审 + 对抗复核,确认 16 项;测试 100 → 110)。
+阶段性业务代码审查与加固(多维度评审 + 对抗复核,确认 16 项)+ 新增接入自检命令;测试 100 → 117。
+
+### Added
+
+- **`moo:cloud:test` 接入自检命令**:不依赖真实异常/慢查询发生,直接推一条可识别的自检 runtime + 一条自检慢 SQL 走真实 intake 端点,逐步反馈「配置检查 → 心跳 → 推送 runtime → 推送慢 SQL」,让新手一键确认「采集 → 推送 → 云端」整条管道是否有效。自检记录可识别(`SelfTestException` / SQL 带 `self-test` 标记)、幂等不堆积(固定 hash 只 upsert),默认保留为「未处理」便于在云端亲眼确认数据已到达(`--resolve` 推送后自动解决);支持 `--type=runtimes|slow_sql|both`。复用云端既有端点,契约零改动。
 
 ### Fixed
 

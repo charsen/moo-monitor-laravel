@@ -139,6 +139,29 @@ class SqlSlowRecorder
         ]);
     }
 
+    /**
+     * 构造一条「自检」慢 SQL 记录(供 moo:cloud:test 验证推送管道),不落本地盘。
+     *
+     * 复用真实 build() 路径,保证形状与正常采集、与云端 intake 契约完全一致。SQL 带 self-test 标记便于
+     * 在云端识别;hash 由固定 sql_raw + file:line 决定 → 稳定,重复自检只 upsert 同一条。
+     *
+     * @return array<string,mixed>
+     */
+    public function buildSelfTestRecord(): array
+    {
+        $now          = $this->nowIso();
+        $sqlRaw       = 'select /* moo-monitor self-test */ ? as connectivity_check';
+        $sqlLast      = 'select /* moo-monitor self-test */ 1 as connectivity_check';
+        $file         = 'moo-monitor/self-test';
+        $line         = 0;
+        $tookMs       = (float) max(1, (int) ($this->config['threshold_ms'] ?? 100));
+        $hash         = $this->makeHash($sqlRaw, $file, $line);
+        $data         = $this->build($hash, $sqlRaw, $sqlLast, $tookMs, $file, $line, null, $now);
+        $data['meta'] = ['updated_at' => $now];
+
+        return $data;
+    }
+
     // ====================================================================
     // 内部:hash / build / refresh
     // ====================================================================

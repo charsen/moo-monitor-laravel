@@ -10,6 +10,7 @@ use Mooeen\Monitor\Recorder\Concerns\ManagesBucketedRecords;
 use Mooeen\Monitor\Recorder\Concerns\MasksSensitiveUrl;
 use Mooeen\Monitor\Recorder\Concerns\TracksDailyCap;
 use Mooeen\Monitor\Recorder\Concerns\WritesBucketedYaml;
+use Mooeen\Monitor\SelfTestException;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 use Throwable;
 
@@ -149,6 +150,26 @@ class RuntimeErrorRecorder
             'origin'   => get_class($origin),
             'url'      => $request !== null ? $this->maskUrl($request->fullUrl()) : null,
         ]);
+    }
+
+    /**
+     * 构造一条「自检」runtime 记录(供 moo:cloud:test 验证推送管道),不落本地盘。
+     *
+     * 复用真实 build() 路径,保证形状与正常采集、与云端 intake 契约完全一致。hash 由固定的
+     * SelfTestException 类 + 本方法所在 file:line + 固定 message 决定 → 稳定,重复自检只 upsert 同一条。
+     *
+     * @return array<string,mixed>
+     */
+    public function buildSelfTestRecord(): array
+    {
+        $e    = new SelfTestException('moo-monitor 连通性自检 —— moo:cloud:test 生成的测试记录,可安全忽略或解决');
+        $now  = $this->nowIso();
+        $hash = $this->makeHash($e);
+        $data = $this->build($hash, $e, null, $now);
+        // writeFile 平时才补 meta.updated_at;这里直接推送、不落盘,故手动补上(云端按它做增量/展示)。
+        $data['meta'] = ['updated_at' => $now];
+
+        return $data;
     }
 
     // ====================================================================
