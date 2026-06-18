@@ -2,6 +2,14 @@
 
 `moo-monitor-laravel` 版本变更记录,按 [Keep a Changelog](https://keepachangelog.com/) + [SemVer](https://semver.org/) 风格。
 
+## [0.1.4] — 2026-06-18
+
+放宽 composer 约束以支持 Laravel 10 / 11 宿主(此前仅 `^12`),便于旧版宿主经 VCS 接入。
+
+### Changed
+
+- **框架约束放宽**:`php` `^8.2` → `^8.1`、`laravel/framework` `^12.0` → `^10.10 || ^11.0 || ^12.0`、`symfony/yaml` `^7.0` → `^6.4 || ^7.0`。运行时代码本就只用 Laravel 8+ 通用 API(`reportable` / `callAfterResolving` / `QueryExecuted` / `Http::retry` / `Yaml` / `WeakMap`),无 L11/12 或 PHP 8.2 专属语法,对 L10 宿主零行为差异。`require-dev`(testbench `^10` = L12)维持不变,维护侧仍以 L12 为主测目标。
+
 ## [0.1.3] — 2026-06-14
 
 阶段性业务代码审查与加固(多维度评审 + 对抗复核,确认 16 项)+ 新增接入自检命令;测试 100 → 117。
