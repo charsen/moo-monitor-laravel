@@ -11,6 +11,11 @@ class CloudMcpCommandFakeCloudClient extends CloudClient
 
     public ?bool $lastWithPayload = null;
 
+    /** 受测控制：fetchTodo 返回的 category 值，以及是否干脆不带 category 键。 */
+    public ?string $todoCategory = 'bug';
+
+    public bool $omitCategory = false;
+
     public function __construct() {}
 
     public function fetchRuntime(string $hash, bool $withPayload = false): array
@@ -34,6 +39,26 @@ class CloudMcpCommandFakeCloudClient extends CloudClient
             'ok'     => true,
             'status' => 200,
             'data'   => ['runtime' => ['hash' => $hash, 'status' => 'resolved']],
+            'error'  => null,
+        ];
+    }
+
+    public function fetchTodo(string $id): array
+    {
+        $todo = [
+            'id'       => $id,
+            'status'   => 'open',
+            'priority' => 'high',
+            'markdown' => "todo {$id}",
+        ];
+        if (! $this->omitCategory) {
+            $todo['category'] = $this->todoCategory;
+        }
+
+        return [
+            'ok'     => true,
+            'status' => 200,
+            'data'   => ['todo' => $todo],
             'error'  => null,
         ];
     }
@@ -81,3 +106,20 @@ it('get_runtime 合法 hash 仍正常调用云端,with_payload 字符串按布�
         ->and($cloud->fetchRuntimeCalls)->toBe(1)
         ->and($cloud->lastWithPayload)->toBeFalse();
 });
+
+it('get_todo 元信息按 category 渲染「类型」标签', function (?string $category, bool $omit, string $expected) {
+    $cloud = new CloudMcpCommandFakeCloudClient;
+    $cloud->todoCategory = $category;
+    $cloud->omitCategory = $omit;
+
+    $res = cloudMcpInvoke('callGetTodo', ['id' => 'abc123'], $cloud);
+
+    expect($res['isError'])->toBeFalse()
+        ->and($res['content'][0]['text'])->toContain('"类型"')
+        ->and($res['content'][0]['text'])->toContain($expected);
+})->with([
+    'bug → Bug（缺陷）' => ['bug', false, 'Bug（缺陷）'],
+    'task → 任务'       => ['task', false, '任务'],
+    '未知值原样透传'    => ['weird', false, 'weird'],
+    'category 缺失 → —' => [null, true, '—'],
+]);

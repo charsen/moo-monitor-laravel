@@ -109,6 +109,11 @@ there are no new records to upload.
 
 `status` is optional.
 
+Each todo row carries `category` (added 2026-06-22): `bug` = reported via the
+Chrome extension, `task` = created manually in the cloud UI. The column is an
+enum defaulting to `bug`, so pre-existing rows read back as `bug`. The list
+endpoint filters by `status` only — there is no server-side `category` filter.
+
 ### Get Todo
 
 `POST /api/v1/todos/get`
@@ -116,6 +121,9 @@ there are no new records to upload.
 ```json
 { "token": "moo_xxx", "id": "todo-id" }
 ```
+
+The returned `todo` object includes `category` (`bug`/`task`); its `markdown`
+field is rendered with a matching heading (`# Bug：…` / `# 任务：…`).
 
 ### Update Todo Status
 

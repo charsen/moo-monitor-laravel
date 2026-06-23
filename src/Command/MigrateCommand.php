@@ -5,12 +5,12 @@
  * @Date: 2026-06-12
  * @Description: 从 moo-scaffold ≤3.8 迁移本地监控数据到 moo-monitor-laravel 的新布局
  *
- * 做三件事(全部幂等,可反复跑):
- *   1. 旧 YAML 平移:base_path('scaffold/{runtimes,sql-slows}') 三桶 → storage/moo-monitor/ 对应桶;
- *      同 hash 已存在时按 meta.updated_at 新者胜,旧者丢弃。
- *   2. 推送游标平移:storage/app/scaffold/cloud-sync.json → storage/moo-monitor/cloud-sync.json;
- *      两边都有时逐类型取较旧水位合并(游标偏旧只会多推,云端幂等无害;偏新会让旧布局未推记录被增量跳过)。
- *   3. .env 体检:列出仍残留的 SCAFFOLD_RUNTIME/SQL_SLOW/CLOUD 变量与新名对照(只提示,不改文件)。
+ * 做三件事（全部幂等，可反复跑）：
+ *   1. 旧 YAML 平移：base_path('scaffold/{runtimes,sql-slows}') 三桶 → storage/moo-monitor/ 对应桶；
+ *      同 hash 已存在时按 meta.updated_at 新者胜，旧者丢弃。
+ *   2. 推送游标平移：storage/app/scaffold/cloud-sync.json → storage/moo-monitor/cloud-sync.json;
+ *      两边都有时逐类型取较旧水位合并（游标偏旧只会多推，云端幂等无害；偏新会让旧布局未推记录被增量跳过）。
+ *   3. .env 体检：列出仍残留的 SCAFFOLD_RUNTIME/SQL_SLOW/CLOUD 变量与新名对照（只提示，不改文件）。
  */
 
 namespace Mooeen\Monitor\Command;
@@ -23,12 +23,12 @@ class MigrateCommand extends Command
 {
     protected $name = 'moo:monitor:migrate';
 
-    protected $description = '从 moo-scaffold ≤3.8 迁移本地监控数据与推送游标到 storage/moo-monitor/(幂等)';
+    protected $description = '从 moo-scaffold ≤3.8 迁移本地监控数据与推送游标到 storage/moo-monitor/（幂等）';
 
     protected $signature = 'moo:monitor:migrate
-        {--from-runtimes=scaffold/runtimes : 旧 runtime YAML 目录(相对项目根)}
-        {--from-sql-slows=scaffold/sql-slows : 旧慢 SQL YAML 目录(相对项目根)}
-        {--dry-run : 只报告将执行的动作,不实际移动}';
+        {--from-runtimes=scaffold/runtimes : 旧 runtime YAML 目录（相对项目根）}
+        {--from-sql-slows=scaffold/sql-slows : 旧慢 SQL YAML 目录（相对项目根）}
+        {--dry-run : 只报告将执行的动作，不实际移动}';
 
     public function handle(): int
     {
@@ -55,11 +55,11 @@ class MigrateCommand extends Command
         $this->checkEnv();
 
         if (! $somethingDone) {
-            $this->info('没有发现需要迁移的旧数据(已迁移过或从未使用本地缓冲)。');
+            $this->info('没有发现需要迁移的旧数据（已迁移过或从未使用本地缓冲）。');
         } elseif ($dryRun) {
-            $this->info('dry-run 完成,以上动作未实际执行。');
+            $this->info('dry-run 完成，以上动作未实际执行。');
         } else {
-            $this->info('迁移完成。建议接着跑:php artisan moo:cloud:push --dry-run 验证推送管道。');
+            $this->info('迁移完成。建议接着跑：php artisan moo:cloud:push --dry-run 验证推送管道。');
         }
 
         return self::SUCCESS;
@@ -71,7 +71,7 @@ class MigrateCommand extends Command
         if (! is_dir($from)) {
             return false;
         }
-        // 防自迁:--from-* 指到新位置(或宿主已自定义为同一目录)时跳过
+        // 防自迁：--from-* 指到新位置（或宿主已自定义为同一目录）时跳过
         if (rtrim($from, '/') === rtrim($to, '/')) {
             return false;
         }
@@ -108,7 +108,7 @@ class MigrateCommand extends Command
                         if (@copy($src, $dst)) {
                             @unlink($src);
                         } else {
-                            $this->warn("移动失败,已跳过:{$src}");
+                            $this->warn("移动失败，已跳过：{$src}");
 
                             continue;
                         }
@@ -119,11 +119,11 @@ class MigrateCommand extends Command
         }
 
         if ($moved === 0 && $skipped === 0) {
-            // 没有 yaml 可迁,但旧布局空壳(仅 .gitkeep / .gitignore 残留)也该清 —— 支持重跑补清
+            // 没有 yaml 可迁，但旧布局空壳（仅 .gitkeep / .gitignore 残留）也该清 —— 支持重跑补清
             if (! $dryRun) {
                 $this->removeDirIfEmpty($from);
                 if (! is_dir($from)) {
-                    $this->line("[{$label}] 旧目录空壳已清理:" . $this->shortPath($from));
+                    $this->line("[{$label}] 旧目录空壳已清理：" . $this->shortPath($from));
 
                     return true;
                 }
@@ -133,13 +133,13 @@ class MigrateCommand extends Command
         }
 
         $this->line(sprintf(
-            '%s[%s] %s → %s:迁移 %d 条%s',
+            '%s[%s] %s → %s：迁移 %d 条%s',
             $dryRun ? '(dry-run)' : '',
             $label,
             $this->shortPath($from),
             $this->shortPath($to),
             $moved,
-            $skipped > 0 ? ",丢弃旧重复 {$skipped} 条" : '',
+            $skipped > 0 ? "，丢弃旧重复 {$skipped} 条" : '',
         ));
 
         if (! $dryRun) {
@@ -161,9 +161,9 @@ class MigrateCommand extends Command
         $oldState = $this->readJson($old);
         $newState = is_file($new) ? $this->readJson($new) : [];
 
-        // 逐类型取较旧水位:游标偏旧只是多推一遍(云端幂等),偏新才会漏 —— 永远保守取小。
-        // 典型场景:升级后新布局已先推送过一次(新游标 ≈ now),旧目录里 updated_at 落在
-        // (旧游标, 新游标) 区间的未推送记录若按"取大"合并,会被增量推送永久跳过。
+        // 逐类型取较旧水位：游标偏旧只是多推一遍（云端幂等），偏新才会漏 —— 永远保守取小。
+        // 典型场景：升级后新布局已先推送过一次（新游标 ≈ now），旧目录里 updated_at 落在
+        // （旧游标， 新游标） 区间的未推送记录若按「取大」合并，会被增量推送永久跳过。
         $merged = $newState;
         foreach ($oldState as $type => $cursor) {
             if (! array_key_exists($type, $newState)) {
@@ -180,7 +180,7 @@ class MigrateCommand extends Command
             $this->ensureDirWithGitignore(dirname($new));
             @file_put_contents($new, json_encode($merged, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
             @unlink($old);
-            @unlink($old . '.lock'); // writeState 的 flock 锁文件,跟游标一起清
+            @unlink($old . '.lock'); // writeState 的 flock 锁文件，跟游标一起清
             $this->removeDirIfEmpty(dirname($old));
         }
 
@@ -189,7 +189,7 @@ class MigrateCommand extends Command
         return true;
     }
 
-    /** .env 旧变量体检:只提示改名对照,不改文件。 */
+    /** .env 旧变量体检：只提示改名对照，不改文件。 */
     private function checkEnv(): void
     {
         $envFile = base_path('.env');
@@ -208,7 +208,7 @@ class MigrateCommand extends Command
         }
 
         $this->newLine();
-        $this->warn('.env 中发现旧 SCAFFOLD_* 变量(已不生效),请改名:');
+        $this->warn('.env 中发现旧 SCAFFOLD_* 变量（已不生效），请改名：');
         $this->table(
             ['旧变量', '新变量'],
             array_map(fn ($k) => [$k, preg_replace('/^SCAFFOLD_/', 'MOO_MONITOR_', $k)], $found),
@@ -217,7 +217,7 @@ class MigrateCommand extends Command
 
     // ── 工具 ─────────────────────────────────────────────────────────────
 
-    /** 按 meta.updated_at(回退 last_seen,再回退 mtime)比较新旧。 */
+    /** 按 meta.updated_at（回退 last_seen，再回退 mtime）比较新旧。 */
     private function srcIsNewer(string $src, string $dst): bool
     {
         return $this->recordEpoch($src) > $this->recordEpoch($dst);
@@ -265,8 +265,8 @@ class MigrateCommand extends Command
     }
 
     /**
-     * 清空后的旧目录(含空 bucket 子目录)能删则删;删不掉不报错。
-     * git-sync 时代残留的 .gitkeep / .gitignore 一并清(只认这两个名字,不碰其他文件)。
+     * 清空后的旧目录（含空 bucket 子目录）能删则删；删不掉不报错。
+     * git-sync 时代残留的 .gitkeep / .gitignore 一并清（只认这两个名字，不碰其他文件）。
      */
     private function removeDirIfEmpty(string $dir): void
     {

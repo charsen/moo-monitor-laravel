@@ -111,13 +111,13 @@ config/moo-monitor.php
 php artisan config:clear
 ```
 
-**推荐:一键自检。** 不用等真异常发生,直接推一条 runtime + 一条慢 SQL 到云端,逐步确认配置是否有效：
+**推荐：一键自检。** 不用等真异常发生，直接推一条 runtime + 一条慢 SQL 到云端，逐步确认配置是否有效：
 
 ```bash
 php artisan moo:cloud:test
 ```
 
-输出会逐项反馈:配置检查 → 心跳(连通 + 鉴权)→ 推送自检 runtime → 推送自检慢 SQL。全绿即说明「采集 → 推送 → 云端」整条管道通畅。自检记录是可识别的(runtime 类名 `SelfTestException`、SQL 带 `self-test` 标记),默认保留为「未处理」,这样你能去云端 runtimes / slow_queries 列表**亲眼确认数据已到达**;确认后在 UI 解决即可,或加 `--resolve` 让命令推送后自动标记已解决。重复运行只 upsert 同一条,不会堆积。
+输出会逐项反馈：配置检查 → 心跳（连通 + 鉴权）→ 推送自检 runtime → 推送自检慢 SQL。全绿即说明「采集 → 推送 → 云端」整条管道通畅。自检记录是可识别的（runtime 类名 `SelfTestException`、SQL 带 `self-test` 标记），默认保留为「未处理」，这样你能去云端 runtimes / slow_queries 列表**亲眼确认数据已到达**；确认后在 UI 解决即可，或加 `--resolve` 让命令推送后自动标记已解决。重复运行只 upsert 同一条，不会堆积。
 
 也可以用既有方式手动验证 —— 查看本地是否有待推送数据：
 
@@ -177,7 +177,7 @@ php artisan moo:cloud:push
 
 | 命令 | 说明 |
 | --- | --- |
-| `php artisan moo:cloud:test` | 自检:推一条 runtime + 一条慢 SQL 到云端,确认接入配置有效。 |
+| `php artisan moo:cloud:test` | 自检：推一条 runtime + 一条慢 SQL 到云端，确认接入配置有效。 |
 | `php artisan moo:cloud:push` | 推送 runtime 异常和慢 SQL 到云端。 |
 | `php artisan moo:cloud:push --dry-run` | 只统计待推送数量，不发送请求。 |
 | `php artisan moo:cloud:push --type=runtimes` | 只推送运行时异常。 |
@@ -199,8 +199,8 @@ php artisan moo:cloud:push
 | `MOO_MONITOR_CLOUD_ENABLED` | `false` | 是否启用云端推送。 |
 | `MOO_MONITOR_CLOUD_URL` | `https://sc.mooeen.com` | 云端地址。 |
 | `MOO_MONITOR_CLOUD_TOKEN` | 空 | 项目接入 token。 |
-| `MOO_MONITOR_CLOUD_TIMEOUT` | `5` | 推送 HTTP 超时(秒)。 |
-| `MOO_MONITOR_CLOUD_VERIFY` | `true` | TLS 证书校验,内网自签证书可设为 `false`。 |
+| `MOO_MONITOR_CLOUD_TIMEOUT` | `5` | 推送 HTTP 超时（秒）。 |
+| `MOO_MONITOR_CLOUD_VERIFY` | `true` | TLS 证书校验，内网自签证书可设为 `false`。 |
 | `MOO_MONITOR_CLOUD_BATCH` | `100` | 每批推送数量。 |
 | `MOO_MONITOR_CLOUD_SCHEDULE` | `true` | 与 `ENABLED` 同时为真时自动挂每分钟推送。 |
 | `MOO_MONITOR_CLOUD_LOCAL_RETENTION_DAYS` | `7` | 推送成功后本地缓冲保留天数。 |
@@ -237,6 +237,8 @@ claude mcp add moo-cloud -- php artisan moo:cloud:mcp
 ```
 
 MCP 复用 `.env` 中的 `MOO_MONITOR_CLOUD_URL` 和 `MOO_MONITOR_CLOUD_TOKEN`，不需要额外 token。
+
+待办分两类：`bug`（Chrome 扩展采集的缺陷）和 `task`（云端管理界面手动新建的任务）。`list_open_todos` / `get_todo` 返回的「类型」字段会标明，便于 AI 区分「修缺陷」和「做任务」。
 
 ## 从 moo-scaffold <= 3.8 迁移
 
