@@ -15,10 +15,10 @@ use Mooeen\Monitor\Recorder\SqlSlowRecorder;
 use Throwable;
 
 /**
- * moo-monitor-laravel:Laravel 运行时异常 + 慢 SQL 监控,推送到 moo-scaffold-cloud。
+ * moo-monitor-laravel:Laravel 运行时异常 + 慢 SQL 监控，推送到 moo-scaffold-cloud。
  *
- * headless 包:不注册任何路由 / 视图,查看与处置统一走云端;
- * 本地只负责「采集 → 缓冲(storage/moo-monitor)→ 推送(moo:cloud:push)」。
+ * headless 包：不注册任何路由 / 视图，查看与处置统一走云端；
+ * 本地只负责「采集 → 缓冲（storage/moo-monitor）→ 推送（moo:cloud:push）」。
  */
 class MonitorProvider extends ServiceProvider
 {
@@ -28,15 +28,15 @@ class MonitorProvider extends ServiceProvider
             __DIR__ . '/../config/moo-monitor.php' => config_path('moo-monitor.php'),
         ], 'moo-monitor-config');
 
-        // 慢 SQL 监听 — 必须同步(QueryExecuted 携带 PDO 引用,不能进 Queue Job)
+        // 慢 SQL 监听 — 必须同步（QueryExecuted 携带 PDO 引用，不能进 Queue Job）
         Event::listen(
             \Illuminate\Database\Events\QueryExecuted::class,
             [SqlSlowListener::class, 'handle'],
         );
 
-        // 异常自动挂钩(exception.auto_hook,默认开):把 ExceptionDispatcher 挂到 host 的
-        // reportable 链,宿主零接入。Dispatcher 内部 WeakMap 防双计 —— 即使宿主 bootstrap/app.php
-        // 还留着旧的手动接入,同一异常也只记一次。
+        // 异常自动挂钩（exception.auto_hook，默认开）：把 ExceptionDispatcher 挂到 host 的
+        // reportable 链，宿主零接入。Dispatcher 内部 WeakMap 防双计 —— 即使宿主 bootstrap/app.php
+        // 还留着旧的手动接入，同一异常也只记一次。
         if ((bool) config('moo-monitor.exception.auto_hook', true)) {
             $this->callAfterResolving(ExceptionHandler::class, function ($handler): void {
                 if (method_exists($handler, 'reportable')) {
@@ -47,8 +47,8 @@ class MonitorProvider extends ServiceProvider
             });
         }
 
-        // 云端推送:cloud.enabled + cloud.schedule 同时为真时,自动挂每分钟调度(需宿主跑 schedule:run)。
-        // 仅 console 注册(scheduler 只在 CLI 生效);用 booted 确保 Schedule 已可解析。
+        // 云端推送：cloud.enabled + cloud.schedule 同时为真时，自动挂每分钟调度（需宿主跑 schedule:run）。
+        // 仅 console 注册（scheduler 只在 CLI 生效）；用 booted 确保 Schedule 已可解析。
         if ($this->app->runningInConsole()) {
             $this->app->booted(function () {
                 $cfg = (array) config('moo-monitor.cloud', []);
@@ -56,7 +56,7 @@ class MonitorProvider extends ServiceProvider
                     $this->app->make(\Illuminate\Console\Scheduling\Schedule::class)
                         ->command('moo:cloud:push')
                         ->everyMinute()
-                        // 显式 10 分钟锁过期:防一次卡死的 run 用默认 24h 锁把后续推送全堵死。
+                        // 显式 10 分钟锁过期：防一次卡死的 run 用默认 24h 锁把后续推送全堵死。
                         ->withoutOverlapping(10)
                         ->runInBackground();
                 }

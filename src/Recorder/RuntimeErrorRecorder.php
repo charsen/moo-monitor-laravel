@@ -18,16 +18,16 @@ use Throwable;
  * Runtime 错误记录器
  *
  * 把 reportable 的真异常落盘到 storage_path('moo-monitor/runtimes/{open,resolved}/{hash}.yaml')。
- * 本地仅作云端推送前的临时缓冲(目录自带 .gitignore,与宿主 git 解耦)。
+ * 本地仅作云端推送前的临时缓冲（目录自带 .gitignore，与宿主 git 解耦）。
  *
  * 同 hash（class + file + line + normalized message）累加 count、刷新 last_seen，不创建新文件。
  * resolved → 再触发 → 自动 reopen + count+1。
  *
- * 三桶管理 / 聚合 / 文件 IO 在 ManagesBucketedRecords trait(与 SqlSlowRecorder 共用);
+ * 三桶管理 / 聚合 / 文件 IO 在 ManagesBucketedRecords trait（与 SqlSlowRecorder 共用）；
  * 这里只留 runtime 特有的 record / build / refresh / makeHash / extract* + deriveRow。
  *
  * 每日写盘上限（daily_cap，默认 10）：同一 hash 当天复发达到上限后，record() 直接返回 hash
- * 不再写盘 —— 冻结 yaml 后文件无 diff(也不再每分钟被 moo:cloud:push 反复推);次日 daily 翻篇归零。
+ * 不再写盘 —— 冻结 yaml 后文件无 diff（也不再每分钟被 moo:cloud:push 反复推）；次日 daily 翻篇归零。
  */
 class RuntimeErrorRecorder
 {
@@ -37,7 +37,7 @@ class RuntimeErrorRecorder
     use TracksDailyCap;
     use WritesBucketedYaml;
 
-    /** open 数缓存 key(调用方展示徽章/统计也用这个常量) */
+    /** open 数缓存 key（调用方展示徽章/统计也用这个常量） */
     public const CACHE_OPEN_COUNT = 'moo-monitor:runtime:open_count';
 
     private string $basePath;
@@ -51,7 +51,7 @@ class RuntimeErrorRecorder
         $this->basePath = $basePath ?? self::resolveStoragePath($path);
     }
 
-    /** 配置路径解析:绝对路径原样用;相对路径挂在 storage_path() 下(无 Laravel 环境时原样) */
+    /** 配置路径解析：绝对路径原样用；相对路径挂在 storage_path() 下（无 Laravel 环境时原样） */
     public static function resolveStoragePath(string $path): string
     {
         if (str_starts_with($path, '/')) {
@@ -78,7 +78,7 @@ class RuntimeErrorRecorder
             $request ??= function_exists('request') ? request() : null;
             $hash = $this->makeHash($e);
             // 用「记录实际所在的桶」而非 yaml 内 status 字段判定 —— 桶目录是 status 的唯一真源
-            // (deriveRow 同设计),迁移来的旧 yaml 可能 status 字段与落盘桶不一致。
+            // (deriveRow 同设计)，迁移来的旧 yaml 可能 status 字段与落盘桶不一致。
             $bucket   = $this->findBucket($hash);
             $existing = $bucket !== null ? $this->readFile($hash, $bucket) : null;
             $now      = $this->nowIso();
@@ -86,8 +86,8 @@ class RuntimeErrorRecorder
 
             if ($existing && $bucket !== 'open') {
                 // resolved / deleted 桶里的同 hash 复发 → 搬回 open 复活 + count+1。
-                // 之前 deleted 不在此分支:会被当普通已存在记录写进 open,留下「同 hash 同时存在两桶」
-                // 的跨桶重复(破坏聚合不变量、把已软删问题悄悄推回云端)。moveFile 从真实源桶搬。
+                // 之前 deleted 不在此分支：会被当普通已存在记录写进 open，留下「同 hash 同时存在两桶」
+                // 的跨桶重复（破坏聚合不变量、把已软删问题悄悄推回云端）。moveFile 从真实源桶搬。
                 $this->moveFile($hash, $bucket, 'open');
                 $existing['status']        = 'open';
                 $existing['resolved_at']   = null;
@@ -95,7 +95,7 @@ class RuntimeErrorRecorder
                 $existing['resolved_note'] = null;
                 $data                      = $this->refresh($existing, $e, $request, $now);
             } elseif ($existing) {
-                // 当天已达写盘上限 → 直接返回,不写盘(冻结 yaml,不再产生 git diff → 止住爆仓)
+                // 当天已达写盘上限 → 直接返回，不写盘（冻结 yaml，不再产生 git diff → 止住爆仓）
                 if ($this->dailyCapReached($existing, $now)) {
                     return $hash;
                 }
@@ -117,8 +117,8 @@ class RuntimeErrorRecorder
 
             return $hash;
         } catch (Throwable $self) {
-            // safeLog:日志写入本身也可能抛(database/slack 通道后端不可用),否则会逃出 record()
-            // → 经 ExceptionDispatcher 冒泡进宿主异常链。record() 对调用方只返回 string|null,永不抛。
+            // safeLog：日志写入本身也可能抛（database/slack 通道后端不可用），否则会逃出 record()
+            // → 经 ExceptionDispatcher 冒泡进宿主异常链。record() 对调用方只返回 string|null，永不抛。
             $this->safeLog('warning', 'runtime-recorder failed: ' . $self->getMessage());
 
             return null;
@@ -126,9 +126,9 @@ class RuntimeErrorRecorder
     }
 
     /**
-     * 仅在 record() **真正写盘失败**(目录建不出 / 不可写)时记一次诊断。
-     * disabled / 被过滤(4xx·dontReport)/ 桶满这些预期跳过虽也返回 null,但没动盘,不该报错。
-     * 一次请求只记一次,避免刷屏。
+     * 仅在 record() **真正写盘失败**（目录建不出 / 不可写）时记一次诊断。
+     * disabled / 被过滤（4xx·dontReport）/ 桶满这些预期跳过虽也返回 null，但没动盘，不该报错。
+     * 一次请求只记一次，避免刷屏。
      */
     private function logWriteFailure(Throwable $origin, ?Request $request): void
     {
@@ -139,9 +139,9 @@ class RuntimeErrorRecorder
         $logged = true;
 
         $openDir = $this->basePath . '/open';
-        // url 必须走 maskUrl:整条采集链路落盘 request.url 都脱敏,唯独这条诊断日志若用裸 fullUrl(),
-        // 会把 ?token=/api_key= 等密钥明文写进宿主 laravel.log(常被 ELK/Loki 集中采集)。
-        $this->safeLog('error', 'runtime-recorder: 写盘失败(目录不可写?) ' . $openDir, [
+        // url 必须走 maskUrl：整条采集链路落盘 request.url 都脱敏，唯独这条诊断日志若用裸 fullUrl(),
+        // 会把 ?token=/api_key= 等密钥明文写进宿主 laravel.log（常被 ELK/Loki 集中采集）。
+        $this->safeLog('error', 'runtime-recorder: 写盘失败（目录不可写？） ' . $openDir, [
             'is_dir'   => is_dir($openDir),
             'writable' => is_writable(is_dir($openDir) ? $openDir : dirname($openDir)),
             'perms'    => is_dir($openDir) ? substr(sprintf('%o', (int) @fileperms($openDir)), -4) : null,
@@ -153,20 +153,20 @@ class RuntimeErrorRecorder
     }
 
     /**
-     * 构造一条「自检」runtime 记录(供 moo:cloud:test 验证推送管道),不落本地盘。
+     * 构造一条「自检」runtime 记录（供 moo:cloud:test 验证推送管道），不落本地盘。
      *
-     * 复用真实 build() 路径,保证形状与正常采集、与云端 intake 契约完全一致。hash 由固定的
-     * SelfTestException 类 + 本方法所在 file:line + 固定 message 决定 → 稳定,重复自检只 upsert 同一条。
+     * 复用真实 build() 路径，保证形状与正常采集、与云端 intake 契约完全一致。hash 由固定的
+     * SelfTestException 类 + 本方法所在 file:line + 固定 message 决定 → 稳定，重复自检只 upsert 同一条。
      *
      * @return array<string,mixed>
      */
     public function buildSelfTestRecord(): array
     {
-        $e    = new SelfTestException('moo-monitor 连通性自检 —— moo:cloud:test 生成的测试记录,可安全忽略或解决');
+        $e    = new SelfTestException('moo-monitor 连通性自检 —— moo:cloud:test 生成的测试记录，可安全忽略或解决');
         $now  = $this->nowIso();
         $hash = $this->makeHash($e);
         $data = $this->build($hash, $e, null, $now);
-        // writeFile 平时才补 meta.updated_at;这里直接推送、不落盘,故手动补上(云端按它做增量/展示)。
+        // writeFile 平时才补 meta.updated_at；这里直接推送、不落盘，故手动补上（云端按它做增量/展示）。
         $data['meta'] = ['updated_at' => $now];
 
         return $data;
@@ -178,8 +178,8 @@ class RuntimeErrorRecorder
 
     private function shouldReport(Throwable $e): bool
     {
-        // 3.1.0:类列表过滤(SKIP_CLASSES)全部下沉 host Laravel `$exceptions->dontReport([...])`,
-        // 这里只保留行为判断:HttpException 4xx 不记,5xx 仍记
+        // 3.1.0：类列表过滤（SKIP_CLASSES）全部下沉 host Laravel `$exceptions->dontReport([...])`,
+        // 这里只保留行为判断：HttpException 4xx 不记，5xx 仍记
         if ($e instanceof HttpException) {
             if ($e->getStatusCode() < 500) {
                 return false;
@@ -213,13 +213,13 @@ class RuntimeErrorRecorder
         $msg = preg_replace("/'[^']*'/", "'X'", $msg) ?? $msg;
         $msg = preg_replace('/"[^"]*"/', '"X"', $msg) ?? $msg;
         // UUID / 0x 内存地址 / 长 hex(token、hash 片段)→ 占位 —— 否则同一异常因 message 里可变的
-        // UUID/地址(ModelNotFound 带 UUID 等)裂成多 hash。须在数字归一之前(否则 UUID 的数字先被吃掉)。
+        // UUID/地址（ModelNotFound 带 UUID 等）裂成多 hash。须在数字归一之前（否则 UUID 的数字先被吃掉）。
         $msg = preg_replace('/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i', 'U', $msg) ?? $msg;
         $msg = preg_replace('/\b0x[0-9a-f]+\b/i', '0xH', $msg)                                            ?? $msg;
         $msg = preg_replace('/\b[0-9a-f]{16,}\b/i', 'H', $msg)                                            ?? $msg;
         $msg = preg_replace('/\d+/', 'N', $msg)                                                           ?? $msg;
 
-        // hash 前截断放宽到 1024(原 256 易把"前缀相同、尾部不同"的两条不同异常误并成一个 hash)。
+        // hash 前截断放宽到 1024（原 256 易把「前缀相同、尾部不同」的两条不同异常误并成一个 hash）。
         return substr($msg, 0, 1024);
     }
 
@@ -270,7 +270,7 @@ class RuntimeErrorRecorder
             'class' => get_class($e),
             'code'  => (string) $e->getCode(),
             // QueryException 的 message 嵌着带 binding 值的 SQL(WHERE token='…')→ maskSensitiveSql;
-            // 再叠 maskSecrets 兜住应用写进 message 的 JWT / Bearer / 裸密钥(非 SQL 形态)。
+            // 再叠 maskSecrets 兜住应用写进 message 的 JWT / Bearer / 裸密钥（非 SQL 形态）。
             'message' => $this->maskSecrets($this->maskSensitiveSql($e->getMessage())),
             'file'    => $this->relPath($e->getFile()),
             'line'    => $e->getLine(),
@@ -335,8 +335,8 @@ class RuntimeErrorRecorder
 
     private function extractTrace(Throwable $e): array
     {
-        // 先脱敏再截断:trace 里的函数参数可能含 JWT / 裸密钥;先 mask 避免被截断切断导致漏 mask。
-        // maskSensitiveSql + maskSecrets 双层,与 extractException 的 message 脱敏强度对齐(原先只做后者)。
+        // 先脱敏再截断：trace 里的函数参数可能含 JWT / 裸密钥；先 mask 避免被截断切断导致漏 mask。
+        // maskSensitiveSql + maskSecrets 双层，与 extractException 的 message 脱敏强度对齐（原先只做后者）。
         $full     = $this->maskSecrets($this->maskSensitiveSql($e->getTraceAsString()));
         $maxBytes = (int) ($this->config['trace_max_bytes'] ?? 65536);
         if (strlen($full) > $maxBytes) {
@@ -420,7 +420,7 @@ class RuntimeErrorRecorder
         if (is_array($value)) {
             $out = [];
             foreach ($value as $k => $v) {
-                // 总节点预算:深度有上限,但「扁平超大数组」(几万元素的列表/宽 map)会逐个 mask + truncate,
+                // 总节点预算：深度有上限，但「扁平超大数组」（几万元素的列表/宽 map）会逐个 mask + truncate,
                 // 单条异常 payload 撑爆写盘耗时与 yaml 体积。耗尽预算即截断。
                 if (--$budget < 0) {
                     $out['__truncated__'] = '<too many keys>';
@@ -440,9 +440,9 @@ class RuntimeErrorRecorder
         if (is_string($value)) {
             $value = $this->maskSecrets($value);
             $cap   = (int) ($this->config['string_truncate'] ?? 200);
-            // 多字节安全 + 非负长度:原先用字节级 substr,中文/emoji 截在 UTF-8 字符中间会产出非法串,
-            // 被 symfony/yaml 整段 !!binary base64 化(不可读);cap<20 时 cap-20 为负还会反向放大。
-            // 改用字符级 mb_substr + max(0,…),与 SqlSlowRecorder::truncate 对齐。
+            // 多字节安全 + 非负长度：原先用字节级 substr，中文/emoji 截在 UTF-8 字符中间会产出非法串，
+            // 被 symfony/yaml 整段 !!binary base64 化（不可读）；cap<20 时 cap-20 为负还会反向放大。
+            // 改用字符级 mb_substr + max(0，…)，与 SqlSlowRecorder::truncate 对齐。
             $len = function_exists('mb_strlen') ? mb_strlen($value, 'UTF-8') : strlen($value);
             if ($len > $cap) {
                 $keep  = max(0, $cap - 20);
@@ -464,7 +464,7 @@ class RuntimeErrorRecorder
     }
 
     /**
-     * 单条 yaml 派生 list/count/prune 用字段(原 index 持有的字段全在这)。
+     * 单条 yaml 派生 list/count/prune 用字段（原 index 持有的字段全在这）。
      * 桶名为 status 唯一真源 — 防 yaml 内 `status` 字段跟落盘位置不同步。
      */
     private function deriveRow(string $bucket, array $data): array

@@ -11,16 +11,16 @@ use Throwable;
 /**
  * 把本地 runtime / 慢 SQL 的 yaml 记录增量推送到 moo-scaffold-cloud。
  *
- * 设计取舍(严谨性):
- *   - 解耦请求链路:只读盘 + 发 HTTP,绝不挂在异常/查询回调里,云端故障不拖慢宿主 app。
- *   - 幂等:云端按 (project, hash) upsert,重复推送只是覆盖,无副作用。
- *   - 增量:按记录的 meta.updated_at 游标,只推「自上次成功推送后有变化」的;
- *     游标存本地 json(每端各自维护),丢了顶多触发一次全量重推(因幂等无害)。
- *   - 失败不前进游标:任一批失败即停,下次重试同一批,不会漏。
- *   - 只推 open + resolved 两桶(用户在意的活跃集);deleted 不上云(本地软删,云端各自生命周期)。
+ * 设计取舍（严谨性）：
+ *   - 解耦请求链路：只读盘 + 发 HTTP，绝不挂在异常/查询回调里，云端故障不拖慢宿主 app。
+ *   - 幂等：云端按 (project, hash) upsert，重复推送只是覆盖，无副作用。
+ *   - 增量：按记录的 meta.updated_at 游标，只推「自上次成功推送后有变化」的；
+ *     游标存本地 json（每端各自维护），丢了顶多触发一次全量重推（因幂等无害）。
+ *   - 失败不前进游标：任一批失败即停，下次重试同一批，不会漏。
+ *   - 只推 open + resolved 两桶（用户在意的活跃集）；deleted 不上云（本地软删，云端各自生命周期）。
  *
- * 记录原样转发:本地 yaml 的嵌套结构(exception/request/context/trace、sql/took/at…)
- * 与云端 intake 的 map() 逐字段对齐,无需再做形状转换。
+ * 记录原样转发：本地 yaml 的嵌套结构（exception/request/context/trace、sql/took/at…）
+ * 与云端 intake 的 map() 逐字段对齐，无需再做形状转换。
  */
 class CloudSync
 {
@@ -54,7 +54,7 @@ class CloudSync
     }
 
     /**
-     * 各类型的推送游标(= 最近已推记录的 meta.updated_at,作"已同步至"水位)。
+     * 各类型的推送游标（= 最近已推记录的 meta.updated_at，作「已同步至」水位）。
      * 未推过的类型不在返回里。供 Cloud 控制台展示「上次推送」用。
      *
      * @return array<string,string>
@@ -73,7 +73,7 @@ class CloudSync
     {
         $base = self::TYPES[$type] ?? null;
         if ($base === null) {
-            return $this->result($type, ok: false, error: "未知类型:{$type}");
+            return $this->result($type, ok: false, error: "未知类型：{$type}");
         }
 
         $cfg = (array) config('moo-monitor.cloud', []);
@@ -90,7 +90,7 @@ class CloudSync
             return $this->result($type, ok: false, error: 'cloud base_url / token 未配置');
         }
 
-        // 游标(= 上次已推水位,毫秒精度浮点 epoch)。先算,再用它给 readRecords 做 mtime 预筛。
+        // 游标（= 上次已推水位，毫秒精度浮点 epoch）。先算，再用它给 readRecords 做 mtime 预筛。
         $cursor      = $all ? null : ($this->readState()[$type] ?? null);
         $cursorEpoch = $cursor ? $this->epochFloat($cursor) : 0.0;
 
@@ -123,7 +123,7 @@ class CloudSync
             return $this->result($type, scanned: $scanned, changed: 0, pushed: 0, batches: 0, ok: true);
         }
 
-        // 分批推送;任一批失败即停,不前进游标
+        // 分批推送；任一批失败即停，不前进游标
         $batchSize = max(1, (int) ($cfg['batch'] ?? 100));
         $pushed    = 0;
         $batches   = 0;
@@ -131,11 +131,11 @@ class CloudSync
             $batches++;
             $r = $client->send($base['endpoint'], $chunk);
             if (! $r['ok']) {
-                // 失败批的 hash 暴露出来:单条被云端持久拒收会卡死整类游标(下次重推同一批又失败),
-                // 且 prune 仅在 ok 时跑 → 本地缓冲持续膨胀。退出码只是 FAILURE、心跳照常,极难发现。
-                // 列出毒批 hash 让运维能定位;best-effort 日志保证 schedule 后台跑(输出进 /dev/null)也留痕。
+                // 失败批的 hash 暴露出来：单条被云端持久拒收会卡死整类游标（下次重推同一批又失败），
+                // 且 prune 仅在 ok 时跑 → 本地缓冲持续膨胀。退出码只是 FAILURE、心跳照常，极难发现。
+                // 列出毒批 hash 让运维能定位；best-effort 日志保证 schedule 后台跑（输出进 /dev/null）也留痕。
                 $failedHashes = $this->hashesOf($chunk);
-                $this->safeLog('warning', "moo-monitor: 推送 {$type} 失败,游标不前进、本地缓冲将累积。云端错误:{$r['error']}", [
+                $this->safeLog('warning', "moo-monitor: 推送 {$type} 失败，游标不前进、本地缓冲将累积。云端错误：{$r['error']}", [
                     'type'          => $type,
                     'failed_hashes' => $failedHashes,
                     'batch'         => $batches,
@@ -154,10 +154,10 @@ class CloudSync
     }
 
     /**
-     * 「本地降级为临时缓冲」的回收:推送成功后调用。
-     *   - resolved 桶:已随推送进云端、由云端管生命周期 → 全清;
-     *   - open 桶:留作聚合锚点,仅清 last_seen 超过 $retentionDays 天的(<=0 不清);
-     *   - deleted 桶:不在推送范围(云端从未收到)→ 一律不动,避免静默丢未上云的数据。
+     * 「本地降级为临时缓冲」的回收：推送成功后调用。
+     *   - resolved 桶：已随推送进云端、由云端管生命周期 → 全清；
+     *   - open 桶：留作聚合锚点，仅清 last_seen 超过 $retentionDays 天的（<=0 不清）；
+     *   - deleted 桶：不在推送范围（云端从未收到）→ 一律不动，避免静默丢未上云的数据。
      *
      * @return array{purged:int,prunedOpen:int}
      */
@@ -167,20 +167,20 @@ class CloudSync
         if ($base === null) {
             return ['purged' => 0, 'prunedOpen' => 0];
         }
-        // N<=0:完全不回收(本地与云端并存),保持现状直接返回 —— 一个字节都不动。
+        // N<=0：完全不回收（本地与云端并存），保持现状直接返回 —— 一个字节都不动。
         if ($retentionDays <= 0) {
             return ['purged' => 0, 'prunedOpen' => 0];
         }
         $basePath = $this->resolvePath((string) config($base['path'], ''));
 
-        // resolved 桶:只清「已随推送上云」的 —— meta.updated_at(回退 resolved_at/last_seen)<= 推送游标。
-        // push 读取后、prune 前才被 resolve 的记录尚未上云 → 留着,下轮推完再清。无游标(从未成功推过)→ 不删。
-        // 不用 mtime 免解析快删:迁移/复制/外部同步可能保留旧 mtime,但 yaml 内 updated_at 更晚。
+        // resolved 桶：只清「已随推送上云」的 —— meta.updated_at（回退 resolved_at/last_seen）<= 推送游标。
+        // push 读取后、prune 前才被 resolve 的记录尚未上云 → 留着，下轮推完再清。无游标（从未成功推过）→ 不删。
+        // 不用 mtime 免解析快删：迁移/复制/外部同步可能保留旧 mtime，但 yaml 内 updated_at 更晚。
         $cursorEpoch = $this->epochFloat((string) ($this->readState()[$type] ?? ''));
         $purged      = 0;
         foreach (glob($basePath . '/resolved/*.yaml') ?: [] as $file) {
             if ($cursorEpoch <= 0) {
-                continue; // 没有已推水位 → 一律不删 resolved(避免删未上云的)
+                continue; // 没有已推水位 → 一律不删 resolved（避免删未上云的）
             }
             try {
                 $rec = Yaml::parse((string) @file_get_contents($file));
@@ -193,14 +193,14 @@ class CloudSync
             $ts    = (string) ($rec['meta']['updated_at'] ?? $rec['resolved_at'] ?? $rec['last_seen'] ?? '');
             $epoch = $ts !== '' ? $this->epochFloat($ts) : (float) (@filemtime($file) ?: PHP_FLOAT_MAX);
             if ($epoch > $cursorEpoch) {
-                continue; // 尚未上云 → 留着,下轮再清
+                continue; // 尚未上云 → 留着，下轮再清
             }
             if (@unlink($file)) {
                 $purged++;
             }
         }
 
-        // open 桶:留作聚合锚点,仅清 last_seen 超过 N 天的 dormant 记录。
+        // open 桶：留作聚合锚点，仅清 last_seen 超过 N 天的 dormant 记录。
         $prunedOpen = 0;
         $cutoff     = time() - $retentionDays * 86400;
         foreach (glob($basePath . '/open/*.yaml') ?: [] as $file) {
@@ -223,10 +223,10 @@ class CloudSync
     }
 
     /**
-     * 把 base_path 下 open + resolved 两桶的 yaml 解析成记录(原样,补 hash)。
+     * 把 base_path 下 open + resolved 两桶的 yaml 解析成记录（原样，补 hash）。
      *
-     * 不用 mtime 预筛:迁移、复制、外部同步可能保留旧 mtime,但 yaml 内 meta.updated_at 更晚。
-     * 这里宁可多 parse 几百条本地缓冲,也不能漏推记录。
+     * 不用 mtime 预筛：迁移、复制、外部同步可能保留旧 mtime，但 yaml 内 meta.updated_at 更晚。
+     * 这里宁可多 parse 几百条本地缓冲，也不能漏推记录。
      *
      * @return array{scanned:int,records:array<int,array>}
      */
@@ -244,14 +244,14 @@ class CloudSync
                 try {
                     $rec = Yaml::parse((string) @file_get_contents($file));
                 } catch (Throwable) {
-                    continue; // 坏文件跳过,不阻断整体推送
+                    continue; // 坏文件跳过，不阻断整体推送
                 }
                 if (! is_array($rec)) {
                     continue;
                 }
                 $rec['hash'] = $hash;
-                // 无 updated_at / last_seen 的记录(legacy / 手改 yaml)用文件 mtime 兜底一个时间戳。
-                // 否则主循环 epoch=0 → 每次都进 changed 且游标永不前进 → 该记录被永久重推(2026-06-09 修)。
+                // 无 updated_at / last_seen 的记录（legacy / 手改 yaml）用文件 mtime 兜底一个时间戳。
+                // 否则主循环 epoch=0 → 每次都进 changed 且游标永不前进 → 该记录被永久重推（2026-06-09 修）。
                 $hasTs = (($rec['meta']['updated_at'] ?? '') !== '') || (($rec['last_seen'] ?? '') !== '');
                 if (! $hasTs) {
                     $mt = @filemtime($file);
@@ -278,7 +278,7 @@ class CloudSync
         return \Mooeen\Monitor\Recorder\RuntimeErrorRecorder::resolveStoragePath($relative);
     }
 
-    /** ISO-8601(可含毫秒)→ 浮点 epoch 秒;解析失败返 0.0。strtotime 会丢毫秒,故走 DateTimeImmutable。 */
+    /** ISO-8601（可含毫秒）→ 浮点 epoch 秒；解析失败返 0.0。strtotime 会丢毫秒，故走 DateTimeImmutable。 */
     private function epochFloat(string $iso): float
     {
         if ($iso === '') {
@@ -308,13 +308,13 @@ class CloudSync
         if (! is_dir($dir)) {
             @mkdir($dir, 0755, true);
         }
-        // 与 recorder 同策略:纯 `*` 的 .gitignore 连自身一起屏蔽,目录在宿主 git status 里零噪音。
+        // 与 recorder 同策略：纯 `*` 的 .gitignore 连自身一起屏蔽，目录在宿主 git status 里零噪音。
         $gitignore = $dir . '/.gitignore';
         if (! is_file($gitignore)) {
             @file_put_contents($gitignore, "*\n");
         }
 
-        // flock 串行化整个 read-modify-write:并发的两个 push(不同 --type / 重叠调度)否则会
+        // flock 串行化整个 read-modify-write：并发的两个 push（不同 --type / 重叠调度）否则会
         // 各自读到旧 state、互相覆盖对方刚写的另一 type 游标 → 那个 type 下次全量重推。原子写只防
         // 文件截断、不防这种 lost-update(2026-06-09 修)。
         $lock = @fopen($this->cursorFile . '.lock', 'c');
@@ -325,8 +325,8 @@ class CloudSync
             $state        = $this->readState();
             $state[$type] = $cursor;
 
-            // 原子写(同 yaml 路径):崩溃/磁盘满 mid-write 不会把 cursor json 截成坏文件 → 否则 readState
-            // 退回空、触发一次全量重推 + resolved 桶因游标=0 暂停回收(buffer bloat)。
+            // 原子写（同 yaml 路径）：崩溃/磁盘满 mid-write 不会把 cursor json 截成坏文件 → 否则 readState
+            // 退回空、触发一次全量重推 + resolved 桶因游标=0 暂停回收（buffer bloat）。
             $json = json_encode($state, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
             $tmp  = $this->cursorFile . '.tmp' . bin2hex(random_bytes(4));
             if (@file_put_contents($tmp, $json) !== false) {
@@ -343,7 +343,7 @@ class CloudSync
     }
 
     /**
-     * 取一批记录的 hash 列表(失败批定位用)。
+     * 取一批记录的 hash 列表（失败批定位用）。
      *
      * @param array<int,array<string,mixed>> $records
      *
