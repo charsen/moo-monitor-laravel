@@ -26,9 +26,11 @@ Laravel 后端监控采集 SDK，用来把项目里的 **运行时异常** 和 *
 
 ## 环境要求
 
-- PHP 8.2+
-- Laravel 12
+- PHP 8.0+
+- Laravel 8.54 / 9 / 10 / 11 / 12
 - 依赖：`laravel/framework`、`symfony/yaml`
+
+> 运行时代码只用 Laravel 8+ 通用 API，对 L8 宿主零行为差异。维护侧以 Laravel 12（`orchestra/testbench ^10`）为主测目标，发版前可用 `composer smoke:lower` 对低版本宿主做一次接入冒烟（见「开发」）。
 
 ## 安装
 
@@ -264,9 +266,24 @@ php artisan moo:cloud:push --dry-run
 
 ```bash
 composer install
-composer test
-./vendor/bin/pint
+composer test            # Pest 套件（testbench ^10 = Laravel 12）
+composer lint            # pint 风格检查（composer format 自动修）
+composer quality         # check:composer + lint + test 一把过
 ```
+
+### 发版前低版本冒烟
+
+Pest 套件只在 Laravel 12 上跑，**版本相关的 API 兼容问题可能测试全绿却在老宿主上 fatal**
+（如 `Http::retry(..., throw:)` 命名参数 L9 才有、L8 会崩）。放宽框架约束或动到框架 API 时，
+发版前对低版本宿主跑一次接入冒烟：
+
+```bash
+composer smoke:lower            # 默认 Laravel 8（最低支持）
+composer smoke:lower -- '^9.0'  # 或指定 9 / 10 / 11
+```
+
+它会临时建一个目标版本的 Laravel app、用 path 仓库装本包，断言 provider 能 boot、命令注册、
+`moo:cloud:test` 打不可达云端时不 PHP fatal（即真正执行了 retry()/Http 路径），跑完自动清理。
 
 ## License
 
