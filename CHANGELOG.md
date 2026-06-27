@@ -2,6 +2,18 @@
 
 `moo-monitor-laravel` 版本变更记录，按 [Keep a Changelog](https://keepachangelog.com/) + [SemVer](https://semver.org/) 风格。
 
+## [0.1.6] — 2026-06-27
+
+继续放宽框架约束以支持 **Laravel 8** 宿主(`php ^8.0` + `laravel/framework ^8.54`),便于更老的项目经 path / VCS 接入。
+
+### Changed
+
+- **框架约束再放宽**:`php` `^8.1` → `^8.0`、`laravel/framework` 增补 `^8.54 || ^9.0`(现为 `^8.54 || ^9.0 || ^10.10 || ^11.0 || ^12.0`)、`symfony/yaml` 增补 `^5.4`(现为 `^5.4 || ^6.4 || ^7.0`,对齐 L8 自带的 Symfony 5.4)。已核对运行时代码无 PHP 8.1 专属语法(无 enum / readonly / never / first-class callable),且 `WeakMap`、`str_contains` / `str_starts_with`、`callAfterResolving`、`reportable`、`QueryExecuted`、`withoutOverlapping` 均为 L8 / PHP 8.0 既有 API;`require-dev`(testbench `^10` = L12)维持不变,维护侧仍以 L12 为主测目标。在 PHP 8.0.30 + Laravel `^8.54` 下 `composer update --dry-run` 实测可解析(锁定 `symfony/yaml v5.4`、`laravel/framework 8.x`)。
+
+### Fixed
+
+- **L8 兼容(云端推送)**:`CloudClient` 的 4 处 HTTP 调用由 `Http::retry(..., throw: false)` 改为全局 `retry()` 辅助函数包裹 —— `Http::retry()` 的 `throw:` 命名参数是 Laravel 9 才引入的,在 L8 宿主上会 fatal(`Unknown named parameter $throw`)。全局 `retry()` 只在回调抛连接级异常时重试,HTTP 错误响应(4xx/5xx)原样返回供读取,与原 `throw:false` 语义一致且更贴合「5xx/4xx 不在此重试、走幂等下一轮」的既定意图,跨 L8~L12 行为统一。
+
 ## [0.1.5] — 2026-06-23
 
 适配云端 todos 新增的 `category`（bug / task）分类透出；并把文档与代码注释里误用的中文半角标点统一为全角。
