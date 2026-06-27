@@ -165,7 +165,7 @@ return [
     // 云端(moo-scaffold-cloud)
     'cloud' => [
         'enabled'              => (bool) env('MOO_MONITOR_CLOUD_ENABLED', false),
-        'base_url'             => rtrim((string) env('MOO_MONITOR_CLOUD_URL', 'https://sc.mooeen.com'), '/'),
+        'base_url'             => rtrim((string) env('MOO_MONITOR_CLOUD_URL', 'https://c.mooeen.com'), '/'),
         'token'                => (string) env('MOO_MONITOR_CLOUD_TOKEN', ''),
         'timeout'              => (int) env('MOO_MONITOR_CLOUD_TIMEOUT', 5),
         'batch'                => (int) env('MOO_MONITOR_CLOUD_BATCH', 100),

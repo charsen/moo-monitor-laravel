@@ -72,8 +72,8 @@ composer require charsen/moo-monitor-laravel
 MOO_MONITOR_CLOUD_ENABLED=true
 MOO_MONITOR_CLOUD_TOKEN=moo_xxxxxxxx
 
-# 私有部署时再配置，默认是 https://sc.mooeen.com
-# MOO_MONITOR_CLOUD_URL=https://sc.mooeen.com
+# 私有部署时再配置，默认是 https://c.mooeen.com
+# MOO_MONITOR_CLOUD_URL=https://c.mooeen.com
 ```
 
 Token 在 moo-scaffold-cloud 的「接入 Token」页面生成，建议开启 `runtimes` 和 `slow_queries` 能力。
@@ -197,7 +197,7 @@ php artisan moo:cloud:push
 | `MOO_MONITOR_SQL_SLOW_THRESHOLD_MS` | `100` | 慢 SQL 阈值，单位毫秒。 |
 | `MOO_MONITOR_SQL_SLOW_MAX_OPEN` | `500` | 本地 open 慢 SQL 最大数量。 |
 | `MOO_MONITOR_CLOUD_ENABLED` | `false` | 是否启用云端推送。 |
-| `MOO_MONITOR_CLOUD_URL` | `https://sc.mooeen.com` | 云端地址。 |
+| `MOO_MONITOR_CLOUD_URL` | `https://c.mooeen.com` | 云端地址。 |
 | `MOO_MONITOR_CLOUD_TOKEN` | 空 | 项目接入 token。 |
 | `MOO_MONITOR_CLOUD_TIMEOUT` | `5` | 推送 HTTP 超时（秒）。 |
 | `MOO_MONITOR_CLOUD_VERIFY` | `true` | TLS 证书校验，内网自签证书可设为 `false`。 |
