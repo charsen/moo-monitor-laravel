@@ -84,7 +84,7 @@ return [
         'enabled' => (bool) env('MOO_MONITOR_CLOUD_ENABLED', false),
 
         // 云端基址（私有部署时改这里）
-        'base_url' => rtrim((string) env('MOO_MONITOR_CLOUD_URL', 'https://sc.mooeen.com'), '/'),
+        'base_url' => rtrim((string) env('MOO_MONITOR_CLOUD_URL', 'https://c.mooeen.com'), '/'),
 
         // 项目接入 token（云端「接入 Token」页生成，须带 runtimes / slow_queries 能力）
         'token' => (string) env('MOO_MONITOR_CLOUD_TOKEN', ''),
