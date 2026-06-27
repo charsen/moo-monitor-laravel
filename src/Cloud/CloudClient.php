@@ -86,14 +86,15 @@ class CloudClient
         try {
             // 瞬时失败（连接重置 / DNS 抖动 / 超时）最多尝试 3 次（= 重试 2 次）、200ms 退避，
             // 避免一次网络抖动就让整批失败、干等下一分钟调度才重试。
-            // 5xx/4xx 响应不在此重试（走幂等的下一轮 push，坏 token 类快速失败）。
-            // 注意 Laravel Http::retry(N) 的 N 是「总尝试次数」，不是「重试次数」。
-            $resp = Http::retry(3, 200, throw: false)
-                ->timeout($this->timeout)
+            // 5xx/4xx 响应不在此重试（原样返回供下方读取，走幂等的下一轮 push，坏 token 类快速失败）。
+            // 用全局 retry() 包裹而非 Http::retry(..., throw:)——throw 命名参数 Laravel 9 才有，
+            // L8 宿主会 fatal。全局 retry() 只在回调抛异常（= 连接级瞬时失败，未链 ->throw() 故 HTTP
+            // 错误响应不抛）时重试；耗尽后重抛 → 下方 catch(Throwable) 兜底成 ok=false。跨 L8~L12 一致。
+            $resp = retry(3, fn () => Http::timeout($this->timeout)
                 ->withOptions(['verify' => $this->verify])
                 ->acceptJson()
                 ->asJson()
-                ->post($url, ['token' => $this->token, 'records' => array_values($records)]);
+                ->post($url, ['token' => $this->token, 'records' => array_values($records)]), 200);
 
             $body = (array) ($resp->json() ?? []);
             // 契约：saved 必须等于 records.length，否则整批视为失败、游标不前进。saved 缺席时用 -1 哨兵
@@ -131,12 +132,11 @@ class CloudClient
         $url = $this->baseUrl . '/' . ltrim(self::PATH_SUMMARY, '/');
 
         try {
-            $resp = Http::retry(2, 100, throw: false)
-                ->timeout(max(1, min($this->timeout, 4)))
+            $resp = retry(2, fn () => Http::timeout(max(1, min($this->timeout, 4)))
                 ->withOptions(['verify' => $this->verify])
                 ->acceptJson()
                 ->asJson()
-                ->post($url, ['token' => $this->token, 'limit' => $limit]);
+                ->post($url, ['token' => $this->token, 'limit' => $limit]), 100);
 
             $body = (array) ($resp->json() ?? []);
             $ok   = $resp->successful() && ($body['ok'] ?? false) === true;
@@ -170,12 +170,11 @@ class CloudClient
         $url = $this->baseUrl . '/' . ltrim(self::PATH_HEARTBEAT, '/');
 
         try {
-            $resp = Http::retry(2, 100, throw: false)
-                ->timeout(max(1, min($this->timeout, 4)))
+            $resp = retry(2, fn () => Http::timeout(max(1, min($this->timeout, 4)))
                 ->withOptions(['verify' => $this->verify])
                 ->acceptJson()
                 ->asJson()
-                ->post($url, ['token' => $this->token]);
+                ->post($url, ['token' => $this->token]), 100);
 
             $body = (array) ($resp->json() ?? []);
 
@@ -283,12 +282,11 @@ class CloudClient
         try {
             // 钳下限 1s:timeout 误配成 0 时 min(0,4)=0,Guzzle 会当「无限等待」——
             // 在常驻的 moo:cloud:mcp（阻塞串行读）里足以卡死整个 server。
-            $resp = Http::retry(2, 100, throw: false)
-                ->timeout(max(1, min($this->timeout, 4)))
+            $resp = retry(2, fn () => Http::timeout(max(1, min($this->timeout, 4)))
                 ->withOptions(['verify' => $this->verify])
                 ->acceptJson()
                 ->asJson()
-                ->post($url, ['token' => $this->token] + $body);
+                ->post($url, ['token' => $this->token] + $body), 100);
 
             $payload = (array) ($resp->json() ?? []);
             $ok      = $resp->successful() && ($payload['ok'] ?? false) === true;
