@@ -64,7 +64,10 @@ class RuntimeErrorRecorder
     /**
      * 记录一条异常。返回 hash；被过滤或失败时返回 null。
      */
-    public function record(Throwable $e, ?Request $request = null): ?string
+    /**
+     * @param array<string,mixed> $meta
+     */
+    public function record(Throwable $e, ?Request $request = null, string $source = 'reportable', array $meta = []): ?string
     {
         if (! ($this->config['enabled'] ?? true)) {
             return null;
@@ -93,18 +96,18 @@ class RuntimeErrorRecorder
                 $existing['resolved_at']   = null;
                 $existing['resolved_by']   = null;
                 $existing['resolved_note'] = null;
-                $data                      = $this->refresh($existing, $e, $request, $now);
+                $data                      = $this->refresh($existing, $e, $request, $now, $source, $meta);
             } elseif ($existing) {
                 // 当天已达写盘上限 → 直接返回，不写盘（冻结 yaml，不再产生 git diff → 止住爆仓）
                 if ($this->dailyCapReached($existing, $now)) {
                     return $hash;
                 }
-                $data = $this->refresh($existing, $e, $request, $now);
+                $data = $this->refresh($existing, $e, $request, $now, $source, $meta);
             } else {
                 if ($this->openBucketFull()) {
                     return null;
                 }
-                $data  = $this->build($hash, $e, $request, $now);
+                $data  = $this->build($hash, $e, $request, $now, $source, $meta);
                 $isNew = true;
             }
 
@@ -165,9 +168,9 @@ class RuntimeErrorRecorder
         $e    = new SelfTestException('moo-monitor 连通性自检 —— moo:cloud:test 生成的测试记录，可安全忽略或解决');
         $now  = $this->nowIso();
         $hash = $this->makeHash($e);
-        $data = $this->build($hash, $e, null, $now);
+        $data = $this->build($hash, $e, null, $now, 'self_test');
         // writeFile 平时才补 meta.updated_at；这里直接推送、不落盘，故手动补上（云端按它做增量/展示）。
-        $data['meta'] = ['updated_at' => $now];
+        $data['meta']['updated_at'] = $now;
 
         return $data;
     }
@@ -227,7 +230,10 @@ class RuntimeErrorRecorder
     // 内部：构建 / 刷新
     // ====================================================================
 
-    private function build(string $hash, Throwable $e, ?Request $request, string $now): array
+    /**
+     * @param array<string,mixed> $meta
+     */
+    private function build(string $hash, Throwable $e, ?Request $request, string $now, string $source = 'reportable', array $meta = []): array
     {
         return [
             'hash'           => $hash,
@@ -245,10 +251,14 @@ class RuntimeErrorRecorder
             'trace'          => $this->extractTrace($e),
             'source_snippet' => $this->extractSourceSnippet($e->getFile(), $e->getLine()),
             'payload'        => $this->extractPayload($request),
+            'meta'           => $this->runtimeMeta($source, $meta),
         ];
     }
 
-    private function refresh(array $existing, Throwable $e, ?Request $request, string $now): array
+    /**
+     * @param array<string,mixed> $meta
+     */
+    private function refresh(array $existing, Throwable $e, ?Request $request, string $now, string $source = 'reportable', array $meta = []): array
     {
         $existing['last_seen'] = $now;
         $existing['count']     = (int) ($existing['count'] ?? 0) + 1;
@@ -260,8 +270,41 @@ class RuntimeErrorRecorder
         $existing['trace']          = $this->extractTrace($e);
         $existing['source_snippet'] = $this->extractSourceSnippet($e->getFile(), $e->getLine());
         $existing['payload']        = $this->extractPayload($request);
+        $existing['meta']           = $this->runtimeMeta($source, $meta, is_array($existing['meta'] ?? null) ? $existing['meta'] : []);
 
         return $existing;
+    }
+
+    /**
+     * @param array<string,mixed> $meta
+     * @param array<string,mixed> $existing
+     *
+     * @return array<string,mixed>
+     */
+    private function runtimeMeta(string $source, array $meta = [], array $existing = []): array
+    {
+        $source = $this->normalizeSource($source);
+        $clean  = [];
+        foreach ($meta as $key => $value) {
+            if (! is_string($key) || $key === 'source') {
+                continue;
+            }
+            if (is_scalar($value) || $value === null) {
+                $clean[$key] = is_string($value) ? mb_substr($value, 0, 500) : $value;
+            }
+        }
+
+        return array_filter(array_merge($existing, $clean, [
+            'source' => $source,
+        ]), fn ($value) => $value !== null && $value !== '');
+    }
+
+    private function normalizeSource(string $source): string
+    {
+        $source = preg_replace('/[^a-z0-9_\-]/i', '_', $source) ?: 'reportable';
+        $source = trim(strtolower($source), '_-');
+
+        return mb_substr($source !== '' ? $source : 'reportable', 0, 64);
     }
 
     private function extractException(Throwable $e): array

@@ -4,6 +4,7 @@ namespace Mooeen\Monitor;
 
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Log\Events\MessageLogged;
+use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use Mooeen\Monitor\Command\CloudMcpCommand;
@@ -23,6 +24,8 @@ use Throwable;
  */
 class MonitorProvider extends ServiceProvider
 {
+    public const VERSION = '0.1.8';
+
     public function boot(): void
     {
         $this->publishes([
@@ -42,7 +45,7 @@ class MonitorProvider extends ServiceProvider
             $this->callAfterResolving(ExceptionHandler::class, function ($handler): void {
                 if (method_exists($handler, 'reportable')) {
                     $handler->reportable(function (Throwable $e): void {
-                        $this->app->make(ExceptionDispatcher::class)->dispatch($e);
+                        $this->app->make(ExceptionDispatcher::class)->dispatch($e, source: 'reportable');
                     });
                 }
             });
@@ -60,8 +63,27 @@ class MonitorProvider extends ServiceProvider
 
                 $exception = $event->context['exception'] ?? null;
                 if ($exception instanceof Throwable) {
-                    $this->app->make(ExceptionDispatcher::class)->dispatch($exception);
+                    $this->app->make(ExceptionDispatcher::class)->dispatch($exception, source: 'log_context', meta: [
+                        'log_level'   => $event->level,
+                        'log_message' => mb_substr((string) $event->message, 0, 500),
+                    ]);
                 }
+            });
+        }
+
+        // 队列失败事件是业务运行时错误的高价值入口。很多项目只依赖 Laravel 的 failed_jobs /
+        // failed 回调，不会显式 report($e)，因此这里直接接 JobFailed，仍交给同一个 dispatcher 去重。
+        if ((bool) config('moo-monitor.exception.queue_failed_hook', true)) {
+            Event::listen(JobFailed::class, function (JobFailed $event): void {
+                $job  = $event->job;
+                $meta = [
+                    'connection' => $event->connectionName,
+                    'queue'      => $this->safeJobValue(fn () => $job?->getQueue()),
+                    'job_name'   => $this->safeJobValue(fn () => method_exists($job, 'resolveName') ? $job->resolveName() : (method_exists($job, 'getName') ? $job->getName() : null)),
+                    'attempts'   => $this->safeJobValue(fn () => method_exists($job, 'attempts') ? $job->attempts() : null),
+                ];
+
+                $this->app->make(ExceptionDispatcher::class)->dispatch($event->exception, source: 'queue_failed', meta: $meta);
             });
         }
 
@@ -98,6 +120,15 @@ class MonitorProvider extends ServiceProvider
                 CloudTestCommand::class,
                 MigrateCommand::class,
             ]);
+        }
+    }
+
+    private function safeJobValue(callable $reader): mixed
+    {
+        try {
+            return $reader();
+        } catch (Throwable) {
+            return null;
         }
     }
 }

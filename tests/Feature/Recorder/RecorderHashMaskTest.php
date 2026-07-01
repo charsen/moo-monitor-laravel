@@ -96,6 +96,29 @@ it('Runtime: Authorization Basic 凭据被完整脱敏', function () {
     }
 });
 
+it('Runtime: records source metadata and marks self test source', function () {
+    $base = sys_get_temp_dir() . '/rhm_' . uniqid();
+    $rec  = new RuntimeErrorRecorder($base, ['enabled' => true, 'mask_keys' => ['token']]);
+
+    try {
+        $rec->record(rhm_exc('queue boom'), null, 'queue_failed', [
+            'connection' => 'redis',
+            'attempts'   => 2,
+            'ignored'    => ['nested' => true],
+        ]);
+        $file = glob($base . '/open/*.yaml')[0];
+        $row  = Yaml::parseFile($file);
+
+        expect($row['meta']['source'])->toBe('queue_failed')
+            ->and($row['meta']['connection'])->toBe('redis')
+            ->and($row['meta']['attempts'])->toBe(2)
+            ->and($row['meta'])->not->toHaveKey('ignored')
+            ->and($rec->buildSelfTestRecord()['meta']['source'])->toBe('self_test');
+    } finally {
+        rhm_rm($base);
+    }
+});
+
 it('SqlSlow: sql_last 非敏感列里的 Bearer / JWT 被脱敏', function () {
     $base = sys_get_temp_dir() . '/rhm_' . uniqid();
     $rec  = new SqlSlowRecorder($base, ['enabled' => true, 'threshold_ms' => 0, 'mask_keys' => ['token', 'password']]);

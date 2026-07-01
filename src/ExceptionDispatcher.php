@@ -37,7 +37,10 @@ class ExceptionDispatcher
         $this->dispatched = new WeakMap;
     }
 
-    public function dispatch(Throwable $e, ?Request $request = null): void
+    /**
+     * @param array<string,mixed> $meta
+     */
+    public function dispatch(Throwable $e, ?Request $request = null, string $source = 'reportable', array $meta = []): void
     {
         // 防双计的 WeakMap 标记放在 try 之前：它必须先生效（否则抛错-重试会双计），
         // 且 isset/赋值本身不会抛。其余主体全部进 try —— request()/config()/跳过判断都要从容器
@@ -64,7 +67,7 @@ class ExceptionDispatcher
             }
 
             // 仅落盘；邮件/钉钉/企微通知由云端在 intake 时触发。
-            $this->dispatchRuntime($e, $request);
+            $this->dispatchRuntime($e, $request, $source, $meta);
         } catch (Throwable $self) {
             // 兜底：dispatch 对宿主的硬保证是「永不抛」。safeLog 自身也绝不抛（日志后端可能正不可用）。
             $this->safeLog('error', 'exception-dispatcher failed: ' . $self->getMessage(), [
@@ -74,11 +77,14 @@ class ExceptionDispatcher
         }
     }
 
-    private function dispatchRuntime(Throwable $e, ?Request $request): void
+    /**
+     * @param array<string,mixed> $meta
+     */
+    private function dispatchRuntime(Throwable $e, ?Request $request, string $source, array $meta): void
     {
         try {
             // 落盘失败的诊断由 RuntimeErrorRecorder 自己记（它才分得清「写失败」与「按规则跳过」）。
-            app(RuntimeErrorRecorder::class)->record($e, $request);
+            app(RuntimeErrorRecorder::class)->record($e, $request, $source, $meta);
         } catch (Throwable $self) {
             $this->safeLog('error', 'exception-dispatcher runtime channel failed: ' . $self->getMessage(), [
                 'origin_class' => get_class($e),
