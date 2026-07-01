@@ -17,6 +17,7 @@ Laravel 后端监控采集 SDK，用来把项目里的 **运行时异常** 和 *
 | --- | --- |
 | 运行时异常监控 | 自动接入 Laravel 异常上报链路，记录异常类型、消息、文件行号、请求 URL、用户、调用栈和源码片段。 |
 | 日志异常兜底 | 自动捕获 `Log::error(..., ['exception' => $e])` 这类只写日志的异常，避免队列 failed / 业务 catch 漏进云端。 |
+| 队列失败捕获 | 监听 Laravel `JobFailed` 事件，把 connection、queue、job name、attempts 等失败上下文带进 runtime。 |
 | 慢 SQL 监控 | 监听 Laravel `QueryExecuted` 事件，超过阈值的 SQL 会被记录，包含执行耗时、SQL 内容、触发位置和请求信息。 |
 | 相同问题聚合 | 相同异常或相同慢 SQL 会按 hash 聚合，累计出现次数，避免同一个问题刷屏。 |
 | 敏感信息脱敏 | 对 password、token、secret、authorization 等常见敏感字段做脱敏处理。 |
@@ -27,9 +28,11 @@ Laravel 后端监控采集 SDK，用来把项目里的 **运行时异常** 和 *
 
 ## 环境要求
 
-- PHP 8.2+
-- Laravel 12
+- PHP 8.0+
+- Laravel 8.54 / 9 / 10 / 11 / 12
 - 依赖：`laravel/framework`、`symfony/yaml`
+
+维护侧会优先在当前 Laravel 12 测试套件上跑完整功能测试；跨版本兼容以安装解析 + 最小 Laravel 应用启动验证守护，确保服务提供者、命令注册和基础配置在 Laravel 8–12 都能正常加载。
 
 ## 安装
 
@@ -118,7 +121,7 @@ php artisan config:clear
 php artisan moo:cloud:test
 ```
 
-输出会逐项反馈：配置检查 → 心跳（连通 + 鉴权）→ 推送自检 runtime → 推送自检慢 SQL。全绿即说明「采集 → 推送 → 云端」整条管道通畅。自检记录是可识别的（runtime 类名 `SelfTestException`、SQL 带 `self-test` 标记），默认保留为「未处理」，这样你能去云端 runtimes / slow_queries 列表**亲眼确认数据已到达**；确认后在 UI 解决即可，或加 `--resolve` 让命令推送后自动标记已解决。重复运行只 upsert 同一条，不会堆积。
+输出会逐项反馈：配置检查 → 心跳（连通 + 鉴权 + SDK/宿主元信息）→ 推送自检 runtime → 推送自检慢 SQL。全绿即说明「采集 → 推送 → 云端」整条管道通畅。自检记录是可识别的（runtime 类名 `SelfTestException`、SQL 带 `self-test` 标记），默认保留为「未处理」，这样你能去云端 runtimes / slow_queries 列表**亲眼确认数据已到达**；确认后在 UI 解决即可，或加 `--resolve` 让命令推送后自动标记已解决。重复运行只 upsert 同一条，不会堆积。
 
 也可以用既有方式手动验证 —— 查看本地是否有待推送数据：
 
@@ -193,6 +196,7 @@ php artisan moo:cloud:push
 | --- | --- | --- |
 | `MOO_MONITOR_RUNTIME_ENABLED` | `true` | 是否采集运行时异常。 |
 | `MOO_MONITOR_EXCEPTION_LOG_CONTEXT_HOOK` | `true` | 是否捕获错误日志 context 里的 `exception` 对象。 |
+| `MOO_MONITOR_EXCEPTION_QUEUE_FAILED_HOOK` | `true` | 是否捕获 Laravel 队列失败事件。 |
 | `MOO_MONITOR_RUNTIME_MAX_OPEN` | `500` | 本地 open 异常最大数量。 |
 | `MOO_MONITOR_RUNTIME_DAILY_CAP` | `10` | 同一异常每天最多写盘次数。 |
 | `MOO_MONITOR_SQL_SLOW_ENABLED` | `false` | 是否采集慢 SQL。 |

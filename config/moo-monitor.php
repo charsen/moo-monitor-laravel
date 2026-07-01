@@ -47,6 +47,9 @@ return [
         // 队列 failed 回调 / 业务兜底 catch 常会这样记录异常；不开这条会只留 laravel.log，云端 runtimes 看不到。
         'log_context_hook' => (bool) env('MOO_MONITOR_EXCEPTION_LOG_CONTEXT_HOOK', true),
 
+        // 捕获 Laravel 队列 JobFailed 事件，补齐 failed_jobs / failed 回调里未显式 report($e) 的失败。
+        'queue_failed_hook' => (bool) env('MOO_MONITOR_EXCEPTION_QUEUE_FAILED_HOOK', true),
+
         // php -r / tinker 里的实验异常跳过
         'cli_experiment_skip' => true,
 

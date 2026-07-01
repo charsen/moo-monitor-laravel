@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Mooeen\Monitor\Cloud;
 
 use Illuminate\Support\Facades\Http;
+use Mooeen\Monitor\MonitorProvider;
 use Throwable;
 
 /**
@@ -174,7 +175,7 @@ class CloudClient
                 ->withOptions(['verify' => $this->verify])
                 ->acceptJson()
                 ->asJson()
-                ->post($url, ['token' => $this->token]), 100);
+                ->post($url, ['token' => $this->token, 'meta' => $this->heartbeatMeta()]), 100);
 
             $body = (array) ($resp->json() ?? []);
 
@@ -182,6 +183,31 @@ class CloudClient
         } catch (Throwable $e) {
             return false;
         }
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function heartbeatMeta(): array
+    {
+        $cloud   = (array) config('moo-monitor.cloud', []);
+        $runtime = (array) config('moo-monitor.runtime', []);
+        $slowSql = (array) config('moo-monitor.sql_slow', []);
+
+        return [
+            'sdk'              => 'moo-monitor-laravel',
+            'sdk_version'      => MonitorProvider::VERSION,
+            'php_version'      => PHP_VERSION,
+            'laravel_version'  => function_exists('app') ? (string) app()->version() : '',
+            'app_env'          => (string) config('app.env', 'unknown'),
+            'app_name'         => (string) config('app.name', 'unknown'),
+            'cloud_enabled'    => (bool) ($cloud['enabled'] ?? false),
+            'runtime_enabled'  => (bool) ($runtime['enabled'] ?? true),
+            'slow_sql_enabled' => (bool) ($slowSql['enabled'] ?? false),
+            'push_runtimes'    => (bool) ($cloud['push']['runtimes'] ?? true),
+            'push_slow_sql'    => (bool) ($cloud['push']['slow_sql'] ?? true),
+            'schedule'         => (bool) ($cloud['schedule'] ?? true),
+        ];
     }
 
     /**

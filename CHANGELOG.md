@@ -2,6 +2,24 @@
 
 `moo-monitor-laravel` 版本变更记录，按 [Keep a Changelog](https://keepachangelog.com/) + [SemVer](https://semver.org/) 风格。
 
+## [0.1.8] — 2026-07-01
+
+### Added
+
+- **Runtime 来源标记**：`ExceptionDispatcher` / `RuntimeErrorRecorder` 新增来源与元信息参数，运行时记录会写入 `meta.source`。当前来源包括 `reportable`、`log_context`、`queue_failed`、`self_test`，供云端列表、详情与排障诊断区分“异常链 / 日志兜底 / 队列失败 / 接入自检”。
+- **队列失败捕获**：新增 `MOO_MONITOR_EXCEPTION_QUEUE_FAILED_HOOK`（默认开启），监听 Laravel `JobFailed` 事件，把队列失败直接落入 runtimes，并附带 connection、queue、job name、attempts 等排查信息。同一异常对象仍复用 `WeakMap` 去重。
+- **心跳元信息**：`moo:cloud:push` 心跳 body 新增 SDK 版本、PHP/Laravel 版本、应用名、环境、采集开关、推送开关与 schedule 状态，云端可直接判断“安装了什么版本、开关是否正确、调度是否配置”。
+
+## [0.1.7] — 2026-07-01
+
+### Added
+
+- **日志异常兜底**：新增 `MOO_MONITOR_EXCEPTION_LOG_CONTEXT_HOOK`（默认开启），捕获 `Log::error(..., ['exception' => $e])` 这类只写日志、未进入 `reportable` 的异常。队列 failed 回调 / 业务 catch 里常见的异常现在也会落入本地 runtime 缓冲，并经 `moo:cloud:push` 进入云端 runtimes；同一异常对象若已走过 `reportable`，仍复用 `ExceptionDispatcher` 的 `WeakMap` 去重，不会双计。
+
+### Verified
+
+- Laravel 8.83 / 9.52 / 10.50 / 11.54 / 12.62 临时应用均完成 path 接入、`package:discover`、`artisan list moo`、`moo:cloud:push --dry-run` smoke 验证，服务提供者和命令注册可正常加载。
+
 ## [0.1.6] — 2026-06-27
 
 继续放宽框架约束以支持 **Laravel 8** 宿主(`php ^8.0` + `laravel/framework ^8.54`),便于更老的项目经 path / VCS 接入。
