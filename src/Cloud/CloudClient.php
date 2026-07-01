@@ -196,7 +196,7 @@ class CloudClient
 
         return [
             'sdk'              => 'moo-monitor-laravel',
-            'sdk_version'      => MonitorProvider::VERSION,
+            'sdk_version'      => MonitorProvider::version(),
             'php_version'      => PHP_VERSION,
             'laravel_version'  => function_exists('app') ? (string) app()->version() : '',
             'app_env'          => (string) config('app.env', 'unknown'),

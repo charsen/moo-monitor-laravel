@@ -2,6 +2,13 @@
 
 `moo-monitor-laravel` 版本变更记录，按 [Keep a Changelog](https://keepachangelog.com/) + [SemVer](https://semver.org/) 风格。
 
+## [0.1.9] — 2026-07-01
+
+### Changed
+
+- 心跳 SDK 版本优先从 Composer 安装信息读取，`MonitorProvider::VERSION` 仅作为 fallback，降低发版忘改常量的风险。
+- 同一异常对象被多个入口捕获时，`ExceptionDispatcher` 仍防重复计数，但允许更高价值来源（如 `queue_failed`）升级已落盘记录的 `meta.source`，并保留 `meta.sources` 来源列表。
+
 ## [0.1.8] — 2026-07-01
 
 ### Added

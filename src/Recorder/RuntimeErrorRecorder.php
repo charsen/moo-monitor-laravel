@@ -175,6 +175,40 @@ class RuntimeErrorRecorder
         return $data;
     }
 
+    /**
+     * 同一异常对象已被记录后，后续入口若带来更有业务价值的来源（如 queue_failed），只升级
+     * meta.source / meta.sources，不增加 count。用于 ExceptionDispatcher 的 WeakMap 去重分支。
+     *
+     * @param array<string,mixed> $meta
+     */
+    public function tagSource(Throwable $e, string $source, array $meta = []): bool
+    {
+        if (! ($this->config['enabled'] ?? true)) {
+            return false;
+        }
+
+        try {
+            $hash   = $this->makeHash($e);
+            $bucket = $this->findBucket($hash);
+            if ($bucket === null) {
+                return false;
+            }
+
+            $existing = $this->readFile($hash, $bucket);
+            if (! is_array($existing)) {
+                return false;
+            }
+
+            $existing['meta'] = $this->runtimeMeta($source, $meta, is_array($existing['meta'] ?? null) ? $existing['meta'] : []);
+
+            return $this->writeFile($hash, $bucket, $existing);
+        } catch (Throwable $self) {
+            $this->safeLog('warning', 'runtime-recorder tag source failed: ' . $self->getMessage());
+
+            return false;
+        }
+    }
+
     // ====================================================================
     // 内部：dontReport 过滤
     // ====================================================================
@@ -283,8 +317,13 @@ class RuntimeErrorRecorder
      */
     private function runtimeMeta(string $source, array $meta = [], array $existing = []): array
     {
-        $source = $this->normalizeSource($source);
-        $clean  = [];
+        $source  = $this->normalizeSource($source);
+        $sources = array_values(array_unique(array_filter(array_merge(
+            (array) ($existing['sources'] ?? []),
+            isset($existing['source']) ? [(string) $existing['source']] : [],
+            [$source],
+        ))));
+        $clean = [];
         foreach ($meta as $key => $value) {
             if (! is_string($key) || $key === 'source') {
                 continue;
@@ -295,7 +334,8 @@ class RuntimeErrorRecorder
         }
 
         return array_filter(array_merge($existing, $clean, [
-            'source' => $source,
+            'source'  => $source,
+            'sources' => $sources,
         ]), fn ($value) => $value !== null && $value !== '');
     }
 

@@ -112,8 +112,31 @@ it('Runtime: records source metadata and marks self test source', function () {
         expect($row['meta']['source'])->toBe('queue_failed')
             ->and($row['meta']['connection'])->toBe('redis')
             ->and($row['meta']['attempts'])->toBe(2)
+            ->and($row['meta']['sources'])->toContain('queue_failed')
             ->and($row['meta'])->not->toHaveKey('ignored')
             ->and($rec->buildSelfTestRecord()['meta']['source'])->toBe('self_test');
+    } finally {
+        rhm_rm($base);
+    }
+});
+
+it('Runtime: tagSource upgrades existing yaml source without bumping count', function () {
+    $base = sys_get_temp_dir() . '/rhm_' . uniqid();
+    $rec  = new RuntimeErrorRecorder($base, ['enabled' => true, 'mask_keys' => ['token']]);
+    $e    = rhm_exc('same object source upgrade');
+
+    try {
+        $hash = $rec->record($e, null, 'reportable');
+        expect($hash)->not->toBeNull();
+
+        $rec->tagSource($e, 'queue_failed', ['connection' => 'redis']);
+        $row = Yaml::parseFile($base . '/open/' . $hash . '.yaml');
+
+        expect($row['count'])->toBe(1)
+            ->and($row['meta']['source'])->toBe('queue_failed')
+            ->and($row['meta']['sources'])->toContain('reportable')
+            ->and($row['meta']['sources'])->toContain('queue_failed')
+            ->and($row['meta']['connection'])->toBe('redis');
     } finally {
         rhm_rm($base);
     }
