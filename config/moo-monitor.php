@@ -43,6 +43,10 @@ return [
         // false 时退回宿主在 bootstrap/app.php 手动接入（两者并存不会双计）。
         'auto_hook' => true,
 
+        // 捕获 Log::error(..., ['exception' => $e]) 这类“只写日志、未进入 reportable”的异常。
+        // 队列 failed 回调 / 业务兜底 catch 常会这样记录异常；不开这条会只留 laravel.log，云端 runtimes 看不到。
+        'log_context_hook' => (bool) env('MOO_MONITOR_EXCEPTION_LOG_CONTEXT_HOOK', true),
+
         // php -r / tinker 里的实验异常跳过
         'cli_experiment_skip' => true,
 

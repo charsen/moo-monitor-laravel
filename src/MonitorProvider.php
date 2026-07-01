@@ -3,6 +3,7 @@
 namespace Mooeen\Monitor;
 
 use Illuminate\Contracts\Debug\ExceptionHandler;
+use Illuminate\Log\Events\MessageLogged;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use Mooeen\Monitor\Command\CloudMcpCommand;
@@ -43,6 +44,23 @@ class MonitorProvider extends ServiceProvider
                     $handler->reportable(function (Throwable $e): void {
                         $this->app->make(ExceptionDispatcher::class)->dispatch($e);
                     });
+                }
+            });
+        }
+
+        // 日志异常兜底：业务代码 / 队列 failed 回调常只做
+        // Log::error('...', ['exception' => $e])，不会再 report($e)。这种异常过去只留在
+        // laravel.log，云端 runtimes 无感知。复用同一个 ExceptionDispatcher，若同一异常对象
+        // 已走过 reportable，WeakMap 会自动去重。
+        if ((bool) config('moo-monitor.exception.log_context_hook', true)) {
+            Event::listen(MessageLogged::class, function (MessageLogged $event): void {
+                if (! in_array($event->level, ['error', 'critical', 'alert', 'emergency'], true)) {
+                    return;
+                }
+
+                $exception = $event->context['exception'] ?? null;
+                if ($exception instanceof Throwable) {
+                    $this->app->make(ExceptionDispatcher::class)->dispatch($exception);
                 }
             });
         }
