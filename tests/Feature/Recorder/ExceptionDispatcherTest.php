@@ -78,6 +78,26 @@ class ExceptionDispatcherTest extends TestCase
         $spy->shouldHaveReceived('record')->once();
     }
 
+    public function test_same_exception_object_can_upgrade_to_higher_priority_source_without_recount(): void
+    {
+        config()->set('moo-monitor.runtime.enabled', true);
+
+        $spy = Mockery::spy(RuntimeErrorRecorder::class);
+        $this->app->instance(RuntimeErrorRecorder::class, $spy);
+
+        $e          = new RuntimeException('reported then queue failed');
+        $dispatcher = app(ExceptionDispatcher::class);
+        $dispatcher->dispatch($e, source: 'reportable');
+        $dispatcher->dispatch($e, source: 'queue_failed', meta: ['connection' => 'redis']);
+
+        $spy->shouldHaveReceived('record')->once();
+        $spy->shouldHaveReceived('tagSource')->once()->with(
+            $e,
+            'queue_failed',
+            Mockery::on(fn (array $meta) => ($meta['connection'] ?? null) === 'redis'),
+        );
+    }
+
     public function test_queue_failed_event_records_runtime_with_source(): void
     {
         config()->set('moo-monitor.runtime.enabled', true);

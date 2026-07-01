@@ -24,7 +24,23 @@ use Throwable;
  */
 class MonitorProvider extends ServiceProvider
 {
-    public const VERSION = '0.1.8';
+    public const VERSION = '0.1.9';
+
+    public static function version(): string
+    {
+        try {
+            if (class_exists(\Composer\InstalledVersions::class)) {
+                $version = \Composer\InstalledVersions::getPrettyVersion('charsen/moo-monitor-laravel');
+                if (is_string($version) && $version !== '') {
+                    return ltrim($version, 'v');
+                }
+            }
+        } catch (Throwable) {
+            // Fallback below.
+        }
+
+        return self::VERSION;
+    }
 
     public function boot(): void
     {

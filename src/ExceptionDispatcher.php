@@ -47,9 +47,15 @@ class ExceptionDispatcher
         // 解析服务，而异常上报正发生在容器/请求状态不一定健康的时刻，任一处抛错都会冒泡进宿主
         // 的 reportable 链、顶替掉 renderException(MonitorProvider 把 dispatch 无保护地挂了上去)。
         if (isset($this->dispatched[$e])) {
+            $previous = (string) ($this->dispatched[$e]['source'] ?? 'reportable');
+            if ($this->sourcePriority($source) > $this->sourcePriority($previous)) {
+                $this->dispatched[$e] = ['source' => $source];
+                $this->tagRuntimeSource($e, $source, $meta);
+            }
+
             return;
         }
-        $this->dispatched[$e] = true;
+        $this->dispatched[$e] = ['source' => $source];
 
         try {
             $request ??= function_exists('request') ? request() : null;
@@ -75,6 +81,31 @@ class ExceptionDispatcher
                 'origin_at'    => $e->getFile() . ':' . $e->getLine(),
             ]);
         }
+    }
+
+    /**
+     * @param array<string,mixed> $meta
+     */
+    private function tagRuntimeSource(Throwable $e, string $source, array $meta): void
+    {
+        try {
+            app(RuntimeErrorRecorder::class)->tagSource($e, $source, $meta);
+        } catch (Throwable $self) {
+            $this->safeLog('error', 'exception-dispatcher runtime source tag failed: ' . $self->getMessage(), [
+                'origin_class' => get_class($e),
+                'origin_at'    => $e->getFile() . ':' . $e->getLine(),
+            ]);
+        }
+    }
+
+    private function sourcePriority(string $source): int
+    {
+        return match ($source) {
+            'queue_failed' => 30,
+            'log_context'  => 20,
+            'reportable'   => 10,
+            default        => 0,
+        };
     }
 
     /**
