@@ -99,13 +99,16 @@ class RuntimeErrorRecorder
                 $existing['resolved_at']   = null;
                 $existing['resolved_by']   = null;
                 $existing['resolved_note'] = null;
-                $data                      = $this->refresh($existing, $e, $request, $now, $source, $meta, $lean);
+                $data                      = $this->refresh($existing, $e, $request, $now, $source, $meta, $lean, $this->drainDailyOverflow($hash));
             } elseif ($existing) {
-                // 当天已达写盘上限 → 直接返回，不写盘（冻结 yaml，不再产生 git diff → 止住爆仓）
+                // 当天已达写盘上限 → 冻结 yaml 不写盘（不再产生 git diff / 不再每分钟重推）；但 overflow 计数器
+                // 累加，真实发生次数不丢（P2-1）。次日首次通过 cap 闸时经 drainDailyOverflow 回填进 count。
                 if ($this->dailyCapReached($existing, $now)) {
+                    $this->bumpDailyOverflow($hash);
+
                     return $hash;
                 }
-                $data = $this->refresh($existing, $e, $request, $now, $source, $meta, $lean);
+                $data = $this->refresh($existing, $e, $request, $now, $source, $meta, $lean, $this->drainDailyOverflow($hash));
             } else {
                 if ($this->openBucketFull()) {
                     return null;
@@ -300,11 +303,12 @@ class RuntimeErrorRecorder
     /**
      * @param array<string,mixed> $meta
      */
-    private function refresh(array $existing, Throwable $e, ?Request $request, string $now, string $source = 'reportable', array $meta = [], bool $lean = false): array
+    private function refresh(array $existing, Throwable $e, ?Request $request, string $now, string $source = 'reportable', array $meta = [], bool $lean = false, int $overflow = 0): array
     {
         $existing['last_seen'] = $now;
-        $existing['count']     = (int) ($existing['count'] ?? 0) + 1;
-        $existing['daily']     = $this->bumpDaily($existing['daily'] ?? null, $now);
+        // count += 1 本次 + overflow 前日冻结期累积的真实发生次数（P2-1，overflow 通常为 0）
+        $existing['count'] = (int) ($existing['count'] ?? 0) + 1 + max(0, $overflow);
+        $existing['daily'] = $this->bumpDaily($existing['daily'] ?? null, $now);
         // 覆盖末次 request / payload / trace（保留 first_seen 不变）；lean 语境下同样降级采集。
         $existing['exception']      = $this->extractException($e, $lean);
         $existing['request']        = $lean ? $this->leanRequest($request) : $this->extractRequest($request);

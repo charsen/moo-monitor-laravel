@@ -25,6 +25,10 @@ use Throwable;
  * 触发（count>=1 云端即可见），云端按 (project,hash) upsert 幂等，下次同 hash 写盘又基于最新落盘值续累，
  * 不会越漂越远。写盘本身是原子 rename，并发只会 last-write-wins，绝不写出半截/损坏 yaml。
  * 刻意不上 flock：会给宿主每条异常/慢查询的同步热路径加锁竞争，违背「采集绝不拖垮宿主」不变量。
+ *
+ * daily_cap 冻结期的计数真实性同样 best-effort（P2-1）：冻结期不写盘、但 cache increment 一个 overflow
+ * 计数器，次日首次写盘时回填进 count；cache 后端不可用/被清则溢出计数丢失、退回「count 偏低」——
+ * 与上文近似计数语义一致（P1-7② 决议：不引入本地文件计数器兜底）。
  */
 trait ManagesBucketedRecords
 {
