@@ -29,8 +29,6 @@ class RuntimeErrorRecorder extends BucketedYamlRecorder
     /** open 数缓存 key（调用方展示徽章/统计也用这个常量） */
     public const CACHE_OPEN_COUNT = 'moo-monitor:runtime:open_count';
 
-    private SensitiveMasker $masker;
-
     public function __construct(?string $basePath = null, ?array $config = null)
     {
         $this->config   = $config ?? (array) config('moo-monitor.runtime', []);
@@ -257,7 +255,7 @@ class RuntimeErrorRecorder extends BucketedYamlRecorder
             'resolved_by'    => null,
             'resolved_note'  => null,
             'exception'      => $this->extractException($e, $lean),
-            'request'        => $lean ? $this->leanRequest($request) : $this->extractRequest($request),
+            'request'        => $lean ? $this->leanRequest($request) : $this->extractRequest($request, true),
             'context'        => $this->extractContext(),
             'trace'          => $lean ? $this->leanTrace($e) : $this->extractTrace($e),
             'source_snippet' => $lean ? $this->leanSnippet($e) : $this->extractSourceSnippet($e->getFile(), $e->getLine()),
@@ -277,7 +275,7 @@ class RuntimeErrorRecorder extends BucketedYamlRecorder
         $existing['daily'] = $this->bumpDaily($existing['daily'] ?? null, $now);
         // 覆盖末次 request / payload / trace（保留 first_seen 不变）；lean 语境下同样降级采集。
         $existing['exception']      = $this->extractException($e, $lean);
-        $existing['request']        = $lean ? $this->leanRequest($request) : $this->extractRequest($request);
+        $existing['request']        = $lean ? $this->leanRequest($request) : $this->extractRequest($request, true);
         $existing['context']        = $this->extractContext();
         $existing['trace']          = $lean ? $this->leanTrace($e) : $this->extractTrace($e);
         $existing['source_snippet'] = $lean ? $this->leanSnippet($e) : $this->extractSourceSnippet($e->getFile(), $e->getLine());
@@ -473,53 +471,6 @@ class RuntimeErrorRecorder extends BucketedYamlRecorder
     private function leanSnippet(Throwable $e): array
     {
         return ['file' => $this->relPath($e->getFile()), 'line' => $e->getLine(), 'language' => 'php', 'code' => ''];
-    }
-
-    private function extractRequest(?Request $request): array
-    {
-        if ($request === null) {
-            return [
-                'method'    => 'CLI',
-                'url'       => null,
-                'ip'        => null,
-                'user_id'   => null,
-                'user_name' => null,
-                'guard'     => null,
-            ];
-        }
-
-        $user  = null;
-        $guard = null;
-        try {
-            $auth = function_exists('auth') ? auth() : null;
-            if ($auth) {
-                // guard 列表可配（失真/覆盖面 P2-5）：默认 admin/user/web；宿主用 api/sanctum/自定义 guard 时配 auth_guards。
-                foreach ((array) ($this->config['auth_guards'] ?? ['admin', 'user', 'web']) as $g) {
-                    $g = (string) $g;
-                    try {
-                        $u = $auth->guard($g)->user();
-                        if ($u !== null) {
-                            $user  = $u;
-                            $guard = $g;
-                            break;
-                        }
-                    } catch (Throwable) {
-                        // skip
-                    }
-                }
-            }
-        } catch (Throwable) {
-            // ignore
-        }
-
-        return [
-            'method'    => $request->getMethod(),
-            'url'       => $this->masker->maskUrl($request->fullUrl()),
-            'ip'        => $request->ip(),
-            'user_id'   => $user?->getKey() !== null ? (string) $user->getKey() : null,
-            'user_name' => $this->extractUserName($user),
-            'guard'     => $guard,
-        ];
     }
 
     private function extractContext(): array
