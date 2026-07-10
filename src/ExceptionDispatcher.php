@@ -100,15 +100,8 @@ class ExceptionDispatcher
 
     private function sourcePriority(string $source): int
     {
-        return match ($source) {
-            'queue_failed'  => 30,
-            'schedule_exit' => 28,
-            'http_5xx'      => 25,
-            'log_context'   => 20,
-            'log_message'   => 15,
-            'reportable'    => 10,
-            default         => 0,
-        };
+        // source 优先级真源在 RuntimeErrorRecorder::SOURCE_PRIORITY（P2-2 收口）；此处复用同一语义，不再各持一份。
+        return RuntimeErrorRecorder::sourceRank($source);
     }
 
     /**

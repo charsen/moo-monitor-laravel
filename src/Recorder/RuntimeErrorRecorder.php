@@ -205,7 +205,19 @@ class RuntimeErrorRecorder
                 return false;
             }
 
-            $existing['meta'] = $this->runtimeMeta($source, $meta, is_array($existing['meta'] ?? null) ? $existing['meta'] : []);
+            $oldMeta = is_array($existing['meta'] ?? null) ? $existing['meta'] : [];
+            $newMeta = $this->runtimeMeta($source, $meta, $oldMeta);
+
+            // 闸①（P2-2）：来源集合 + meta 字段无实质变化 → 不写盘，避免反复刷 mtime/updated_at（ping-pong 重推）。
+            if ($this->metaUnchanged($oldMeta, $newMeta)) {
+                return true;
+            }
+            // 闸②（P2-2）：当天已达 cap（yaml 已冻结）→ 不写盘，meta 变化随次日回填一起落，与 record 冻结口径一致。
+            if ($this->dailyCapReached($existing, $this->nowIso())) {
+                return true;
+            }
+
+            $existing['meta'] = $newMeta;
 
             return $this->writeFile($hash, $bucket, $existing);
         } catch (Throwable $self) {
@@ -327,12 +339,42 @@ class RuntimeErrorRecorder
      *
      * @return array<string,mixed>
      */
+    /**
+     * source 优先级真源（P2-2 收口）：值大者更「具体/高价值」。同一异常多入口时 meta.source 只升不降。
+     * ExceptionDispatcher::sourcePriority 复用本表（sourceRank），不再各持一份、避免 ping-pong。
+     */
+    private const SOURCE_PRIORITY = [
+        'queue_failed'  => 30,
+        'schedule_exit' => 28,
+        'http_5xx'      => 25,
+        'log_context'   => 20,
+        'log_message'   => 15,
+        'reportable'    => 10,
+    ];
+
+    /** source → 优先级；未知来源（self_test 等）为 0。ExceptionDispatcher 复用同一真源。 */
+    public static function sourceRank(string $source): int
+    {
+        return self::SOURCE_PRIORITY[$source] ?? 0;
+    }
+
+    /** 取更高优先级的 source（只升不降）：incoming 不低于 current 就用 incoming，否则保留 current。 */
+    private function preferSource(string $incoming, ?string $current): string
+    {
+        if ($current === null || $current === '') {
+            return $incoming;
+        }
+
+        return self::sourceRank($incoming) >= self::sourceRank($current) ? $incoming : $current;
+    }
+
     private function runtimeMeta(string $source, array $meta = [], array $existing = []): array
     {
-        $source  = $this->normalizeSource($source);
-        $sources = array_values(array_unique(array_filter(array_merge(
+        $source          = $this->normalizeSource($source);
+        $existingPrimary = isset($existing['source']) ? (string) $existing['source'] : null;
+        $sources         = array_values(array_unique(array_filter(array_merge(
             (array) ($existing['sources'] ?? []),
-            isset($existing['source']) ? [(string) $existing['source']] : [],
+            $existingPrimary !== null ? [$existingPrimary] : [],
             [$source],
         ))));
         $clean = [];
@@ -346,9 +388,19 @@ class RuntimeErrorRecorder
         }
 
         return array_filter(array_merge($existing, $clean, [
-            'source'  => $source,
+            // source 只升不降（P2-2）：refresh 带来的低优先级来源不得把 meta.source 降回去；
+            // sources 仍收「见过的全部来源」并集。
+            'source'  => $this->preferSource($source, $existingPrimary),
             'sources' => $sources,
         ]), fn ($value) => $value !== null && $value !== '');
+    }
+
+    /** meta 是否无实质变化（忽略 writeFile 才补的 updated_at）——tagSource 据此免掉多余写盘。 */
+    private function metaUnchanged(array $old, array $new): bool
+    {
+        unset($old['updated_at'], $new['updated_at']);
+
+        return $old == $new;
     }
 
     private function normalizeSource(string $source): string
