@@ -5,10 +5,6 @@ declare(strict_types=1);
 namespace Mooeen\Monitor\Recorder;
 
 use Illuminate\Http\Request;
-use Mooeen\Monitor\Concerns\SafelyLogs;
-use Mooeen\Monitor\Recorder\Concerns\ManagesBucketedRecords;
-use Mooeen\Monitor\Recorder\Concerns\TracksDailyCap;
-use Mooeen\Monitor\Recorder\Concerns\WritesBucketedYaml;
 use Throwable;
 
 /**
@@ -21,19 +17,10 @@ use Throwable;
  * 这里只留慢 SQL 特有的 record / build / refresh / makeHash / extract* + deriveRow。
  * 数据字段精简到 SQL 场景需要的部分（无 trace / payload / source_snippet）。
  */
-class SqlSlowRecorder
+class SqlSlowRecorder extends BucketedYamlRecorder
 {
-    use ManagesBucketedRecords;
-    use SafelyLogs;
-    use TracksDailyCap;
-    use WritesBucketedYaml;
-
     /** open 数缓存 key */
     public const CACHE_OPEN_COUNT = 'moo-monitor:sql_slow:open_count';
-
-    private string $basePath;
-
-    private array $config;
 
     private SensitiveMasker $masker;
 
@@ -329,7 +316,7 @@ class SqlSlowRecorder
     /**
      * 桶名是 status 唯一真源 — 跟 runtime recorder 同设计。
      */
-    private function deriveRow(string $bucket, array $data): array
+    protected function deriveRow(string $bucket, array $data): array
     {
         return [
             'status'         => $bucket,

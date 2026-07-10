@@ -5,10 +5,6 @@ declare(strict_types=1);
 namespace Mooeen\Monitor\Recorder;
 
 use Illuminate\Http\Request;
-use Mooeen\Monitor\Concerns\SafelyLogs;
-use Mooeen\Monitor\Recorder\Concerns\ManagesBucketedRecords;
-use Mooeen\Monitor\Recorder\Concerns\TracksDailyCap;
-use Mooeen\Monitor\Recorder\Concerns\WritesBucketedYaml;
 use Mooeen\Monitor\SelfTestException;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 use Throwable;
@@ -28,19 +24,10 @@ use Throwable;
  * 每日写盘上限（daily_cap，默认 10）：同一 hash 当天复发达到上限后，record() 直接返回 hash
  * 不再写盘 —— 冻结 yaml 后文件无 diff（也不再每分钟被 moo:cloud:push 反复推）；次日 daily 翻篇归零。
  */
-class RuntimeErrorRecorder
+class RuntimeErrorRecorder extends BucketedYamlRecorder
 {
-    use ManagesBucketedRecords;
-    use SafelyLogs;
-    use TracksDailyCap;
-    use WritesBucketedYaml;
-
     /** open 数缓存 key（调用方展示徽章/统计也用这个常量） */
     public const CACHE_OPEN_COUNT = 'moo-monitor:runtime:open_count';
-
-    private string $basePath;
-
-    private array $config;
 
     private SensitiveMasker $masker;
 
@@ -725,7 +712,7 @@ class RuntimeErrorRecorder
      * 单条 yaml 派生 list/count/prune 用字段（原 index 持有的字段全在这）。
      * 桶名为 status 唯一真源 — 防 yaml 内 `status` 字段跟落盘位置不同步。
      */
-    private function deriveRow(string $bucket, array $data): array
+    protected function deriveRow(string $bucket, array $data): array
     {
         return [
             'status'             => $bucket,
