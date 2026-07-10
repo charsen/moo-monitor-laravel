@@ -54,6 +54,7 @@ class SqlSlowListener
                 tookMs: (float) $event->time,
                 file: $frame['file'] ?? '',
                 line: (int) ($frame['line'] ?? 0),
+                connection: $event->connectionName,
             );
         } catch (Throwable $e) {
             // listener 自身不能抛 — 业务请求不能因慢 SQL 上报失败而 500。
