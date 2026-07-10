@@ -27,7 +27,10 @@ trait SafelyLogs
     {
         try {
             if (function_exists('app')) {
-                app('log')->{$level}($message, $context);
+                // moo_monitor_internal 标记（防回环，硬约束第六条）：本包 safeLog 出的 error 级日志
+                // 若被 log_message 采集钩子当成「字符串化异常」再采集，会形成
+                // 「写盘失败 → error 日志 → 采集 → 又写盘失败」死循环。钩子见此标记即跳过。
+                app('log')->{$level}($message, array_merge($context, ['moo_monitor_internal' => true]));
             }
         } catch (Throwable) {
             // 日志后端不可用也绝不向上抛 —— 见类注释，这是采集对宿主的核心保证。
