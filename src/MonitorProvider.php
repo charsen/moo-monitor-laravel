@@ -45,16 +45,31 @@ class MonitorProvider extends ServiceProvider
 
     public function boot(): void
     {
+        $this->publishesConfig();
+        $this->listenSlowQueries();
+        $this->hookExceptionReporting();
+        $this->scheduleCloudPush();
+    }
+
+    private function publishesConfig(): void
+    {
         $this->publishes([
             __DIR__ . '/../config/moo-monitor.php' => config_path('moo-monitor.php'),
         ], 'moo-monitor-config');
+    }
 
-        // 慢 SQL 监听 — 必须同步（QueryExecuted 携带 PDO 引用，不能进 Queue Job）
+    /** 慢 SQL 监听 — 必须同步（QueryExecuted 携带 PDO 引用，不能进 Queue Job）。 */
+    private function listenSlowQueries(): void
+    {
         Event::listen(
             \Illuminate\Database\Events\QueryExecuted::class,
             [SqlSlowListener::class, 'handle'],
         );
+    }
 
+    /** 异常上报的全部采集钩子：reportable 主链 + 五条旁路（http_5xx / log_context / log_message / queue_failed / schedule_exit）。 */
+    private function hookExceptionReporting(): void
+    {
         // 异常自动挂钩（exception.auto_hook，默认开）：把 ExceptionDispatcher 挂到 host 的
         // reportable 链，宿主零接入。Dispatcher 内部 WeakMap 防双计 —— 即使宿主 bootstrap/app.php
         // 还留着旧的手动接入，同一异常也只记一次。
@@ -171,9 +186,14 @@ class MonitorProvider extends ServiceProvider
             Event::listen(\Illuminate\Console\Events\ScheduledTaskFinished::class, $onScheduledFinish);
             Event::listen(\Illuminate\Console\Events\ScheduledBackgroundTaskFinished::class, $onScheduledFinish);
         }
+    }
 
-        // 云端推送：cloud.enabled + cloud.schedule 同时为真时，自动挂每分钟调度（需宿主跑 schedule:run）。
-        // 仅 console 注册（scheduler 只在 CLI 生效）；用 booted 确保 Schedule 已可解析。
+    /**
+     * 云端推送：cloud.enabled + cloud.schedule 同时为真时，自动挂每分钟调度（需宿主跑 schedule:run）。
+     * 仅 console 注册（scheduler 只在 CLI 生效）；用 booted 确保 Schedule 已可解析。
+     */
+    private function scheduleCloudPush(): void
+    {
         if ($this->app->runningInConsole()) {
             $this->app->booted(function () {
                 $cfg = (array) config('moo-monitor.cloud', []);
