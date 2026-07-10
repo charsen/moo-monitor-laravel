@@ -68,51 +68,17 @@ class RuntimeErrorRecorder extends BucketedYamlRecorder
         try {
             $request ??= $this->resolveRequest();
             $hash = $this->makeHash($e);
-            // 用「记录实际所在的桶」而非 yaml 内 status 字段判定 —— 桶目录是 status 的唯一真源
-            // (deriveRow 同设计)，迁移来的旧 yaml 可能 status 字段与落盘桶不一致。
-            $bucket   = $this->findBucket($hash);
-            $existing = $bucket !== null ? $this->readFile($hash, $bucket) : null;
-            $now      = $this->nowIso();
-            $isNew    = false;
             // 危险语境（fatal / 内存逼近上限，矩阵 #7）走 lean path：跳过 file() 整读 / payload 递归脱敏 /
             // trace 五连正则，避免在只剩 32KB 保留内存的 shutdown 兜底里二次 OOM 把这条记录也吞掉。脱敏不降级。
             $lean = $this->isDangerousContext($e);
 
-            if ($existing && $bucket !== 'open') {
-                // resolved / deleted 桶里的同 hash 复发 → 搬回 open 复活 + count+1。
-                // 之前 deleted 不在此分支：会被当普通已存在记录写进 open，留下「同 hash 同时存在两桶」
-                // 的跨桶重复（破坏聚合不变量、把已软删问题悄悄推回云端）。moveFile 从真实源桶搬。
-                $this->moveFile($hash, $bucket, 'open');
-                $existing['status']        = 'open';
-                $existing['resolved_at']   = null;
-                $existing['resolved_by']   = null;
-                $existing['resolved_note'] = null;
-                $data                      = $this->refresh($existing, $e, $request, $now, $source, $meta, $lean, $this->drainDailyOverflow($hash));
-            } elseif ($existing) {
-                // 当天已达写盘上限 → 冻结 yaml 不写盘（不再产生 git diff / 不再每分钟重推）；但 overflow 计数器
-                // 累加，真实发生次数不丢（P2-1）。次日首次通过 cap 闸时经 drainDailyOverflow 回填进 count。
-                if ($this->dailyCapReached($existing, $now)) {
-                    $this->bumpDailyOverflow($hash);
-
-                    return $hash;
-                }
-                $data = $this->refresh($existing, $e, $request, $now, $source, $meta, $lean, $this->drainDailyOverflow($hash));
-            } else {
-                if ($this->openBucketFull()) {
-                    return null;
-                }
-                $data  = $this->build($hash, $e, $request, $now, $source, $meta, $lean);
-                $isNew = true;
-            }
-
-            $this->ensureDir();
-            if (! $this->writeFile($hash, 'open', $data, $isNew)) {
-                $this->logWriteFailure($e, $request);
-
-                return null;
-            }
-
-            return $hash;
+            // 聚合落盘骨架（findBucket → 搬桶 → cap/溢出 → 满闸 → 写盘 → 诊断）在基类 persistAggregated。
+            return $this->persistAggregated(
+                $hash,
+                fn (string $now)                                 => $this->build($hash, $e, $request, $now, $source, $meta, $lean),
+                fn (array $existing, string $now, int $overflow) => $this->refresh($existing, $e, $request, $now, $source, $meta, $lean, $overflow),
+                fn ()                                            => $this->logWriteFailure($e, $request),
+            );
         } catch (Throwable $self) {
             // safeLog：日志写入本身也可能抛（database/slack 通道后端不可用），否则会逃出 record()
             // → 经 ExceptionDispatcher 冒泡进宿主异常链。record() 对调用方只返回 string|null，永不抛。

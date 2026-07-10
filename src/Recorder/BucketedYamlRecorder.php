@@ -43,6 +43,60 @@ abstract class BucketedYamlRecorder
      */
     abstract protected function deriveRow(string $bucket, array $data): array;
 
+    /**
+     * 聚合落盘模板方法（P4）：两个 recorder 逐字重复的 record() 骨架收口于此 ——
+     * findBucket → 复发搬桶 → cap 闸（+ 冻结期溢出计数）→ 满闸 → 原子写盘 → 失败诊断。
+     * 类型特有的 build / refresh / 写失败诊断由子类以闭包传入；shouldReport / lean 等判定留在子类 record()。
+     *
+     * @param callable(string $now):array                               $build       新建记录（$now）
+     * @param callable(array $existing,string $now,int $overflow):array $refresh     刷新已存在记录（回填 overflow）
+     * @param callable():void                                           $onWriteFail 写盘失败时的诊断（一次一记）
+     */
+    protected function persistAggregated(string $hash, callable $build, callable $refresh, callable $onWriteFail): ?string
+    {
+        // 用「记录实际所在的桶」而非 yaml 内 status 字段判定 —— 桶目录是 status 唯一真源（deriveRow 同设计），
+        // 迁移来的旧 yaml 可能 status 字段与落盘桶不一致。
+        $bucket   = $this->findBucket($hash);
+        $existing = $bucket !== null ? $this->readFile($hash, $bucket) : null;
+        $now      = $this->nowIso();
+        $isNew    = false;
+
+        if ($existing && $bucket !== 'open') {
+            // resolved / deleted 桶里的同 hash 复发 → 搬回 open 复活 + count+1（deleted 若漏处理会留跨桶重复：
+            // 破坏聚合不变量、把已软删问题悄悄推回云端）。moveFile 从真实源桶搬。
+            $this->moveFile($hash, $bucket, 'open');
+            $existing['status']        = 'open';
+            $existing['resolved_at']   = null;
+            $existing['resolved_by']   = null;
+            $existing['resolved_note'] = null;
+            $data                      = $refresh($existing, $now, $this->drainDailyOverflow($hash));
+        } elseif ($existing) {
+            // 当天已达写盘上限 → 冻结 yaml 不写盘（不再产生 git diff / 不再每分钟重推）；但 overflow 计数器累加，
+            // 真实发生次数不丢（P2-1）。次日首次通过 cap 闸时经 drainDailyOverflow 回填进 count。
+            if ($this->dailyCapReached($existing, $now)) {
+                $this->bumpDailyOverflow($hash);
+
+                return $hash;
+            }
+            $data = $refresh($existing, $now, $this->drainDailyOverflow($hash));
+        } else {
+            if ($this->openBucketFull()) {
+                return null;
+            }
+            $data  = $build($now);
+            $isNew = true;
+        }
+
+        $this->ensureDir();
+        if (! $this->writeFile($hash, 'open', $data, $isNew)) {
+            $onWriteFail();
+
+            return null;
+        }
+
+        return $hash;
+    }
+
     // ── 桶管理 / 聚合 ─────────────────────────────────────────────────────
 
     /** 顶栏徽章缓存 TTL（秒），从 config 读，未配置回退到 30 */
