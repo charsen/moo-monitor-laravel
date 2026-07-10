@@ -25,7 +25,7 @@ use Throwable;
  */
 class MonitorProvider extends ServiceProvider
 {
-    public const VERSION = '0.1.9';
+    public const VERSION = '0.1.10';
 
     public static function version(): string
     {
