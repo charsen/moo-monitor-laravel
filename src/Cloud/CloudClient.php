@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Mooeen\Monitor\Cloud;
 
 use Illuminate\Support\Facades\Http;
-use Mooeen\Monitor\MonitorProvider;
 use Throwable;
 
 /**
@@ -162,7 +161,7 @@ class CloudClient
      * 拖慢或中断真正的记录推送。用同一个提报 token(云端 /api/v1/heartbeat 挂
      * project.token:runtimes，提报 token 必带该能力，故零额外凭据)。
      */
-    public function heartbeat(): bool
+    public function heartbeat(array $meta = []): bool
     {
         if (! $this->configured()) {
             return false;
@@ -171,11 +170,13 @@ class CloudClient
         $url = $this->baseUrl . '/' . ltrim(self::PATH_HEARTBEAT, '/');
 
         try {
+            // meta 由调用方（moo:cloud:push / moo:cloud:test）用 HeartbeatMeta::collect() 组装后传入 ——
+            // CloudClient 保持纯传输、不读采集/推送业务 config（P2-6）。原样发送，请求体形状不变。
             $resp = retry(2, fn () => Http::timeout(max(1, min($this->timeout, 4)))
                 ->withOptions(['verify' => $this->verify])
                 ->acceptJson()
                 ->asJson()
-                ->post($url, ['token' => $this->token, 'meta' => $this->heartbeatMeta()]), 100);
+                ->post($url, ['token' => $this->token, 'meta' => $meta]), 100);
 
             $body = (array) ($resp->json() ?? []);
 
@@ -183,31 +184,6 @@ class CloudClient
         } catch (Throwable $e) {
             return false;
         }
-    }
-
-    /**
-     * @return array<string,mixed>
-     */
-    private function heartbeatMeta(): array
-    {
-        $cloud   = (array) config('moo-monitor.cloud', []);
-        $runtime = (array) config('moo-monitor.runtime', []);
-        $slowSql = (array) config('moo-monitor.sql_slow', []);
-
-        return [
-            'sdk'              => 'moo-monitor-laravel',
-            'sdk_version'      => MonitorProvider::version(),
-            'php_version'      => PHP_VERSION,
-            'laravel_version'  => function_exists('app') ? (string) app()->version() : '',
-            'app_env'          => (string) config('app.env', 'unknown'),
-            'app_name'         => (string) config('app.name', 'unknown'),
-            'cloud_enabled'    => (bool) ($cloud['enabled'] ?? false),
-            'runtime_enabled'  => (bool) ($runtime['enabled'] ?? true),
-            'slow_sql_enabled' => (bool) ($slowSql['enabled'] ?? false),
-            'push_runtimes'    => (bool) ($cloud['push']['runtimes'] ?? true),
-            'push_slow_sql'    => (bool) ($cloud['push']['slow_sql'] ?? true),
-            'schedule'         => (bool) ($cloud['schedule'] ?? true),
-        ];
     }
 
     /**

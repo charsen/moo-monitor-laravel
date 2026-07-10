@@ -7,6 +7,7 @@ namespace Mooeen\Monitor\Tests\Feature\Cloud;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Mooeen\Monitor\Cloud\CloudClient;
+use Mooeen\Monitor\Cloud\HeartbeatMeta;
 use Mooeen\Monitor\Tests\TestCase;
 
 /**
@@ -241,7 +242,8 @@ class CloudClientTest extends TestCase
         ]);
         Http::fake(['cloud.test/api/v1/heartbeat' => Http::response(['ok' => true], 200)]);
 
-        $this->assertTrue((new CloudClient)->heartbeat());
+        // P2-6：meta 由调用方用 HeartbeatMeta::collect() 组装后传入；CloudClient 只负责原样发送。
+        $this->assertTrue((new CloudClient)->heartbeat(HeartbeatMeta::collect()));
 
         Http::assertSent(function ($req) {
             $meta = $req->data()['meta'] ?? [];
