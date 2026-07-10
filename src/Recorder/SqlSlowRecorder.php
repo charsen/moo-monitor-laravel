@@ -298,9 +298,10 @@ class SqlSlowRecorder
         try {
             $auth = function_exists('auth') ? auth() : null;
             if ($auth) {
-                foreach (['admin', 'user', 'web'] as $g) {
+                // guard 列表可配（P2-5）：默认 admin/user/web；宿主用 api/sanctum/自定义 guard 时配 auth_guards。
+                foreach ((array) ($this->config['auth_guards'] ?? ['admin', 'user', 'web']) as $g) {
                     try {
-                        $u = $auth->guard($g)->user();
+                        $u = $auth->guard((string) $g)->user();
                         if ($u !== null) {
                             $user = $u;
 
