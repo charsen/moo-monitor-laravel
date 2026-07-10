@@ -15,8 +15,8 @@ Laravel 后端监控采集 SDK，用来把项目里的 **运行时异常** 和 *
 
 | 功能 | 说明 |
 | --- | --- |
-| 运行时异常监控 | 自动接入 Laravel 异常上报链路，记录异常类型、消息、文件行号、请求 URL、用户、调用栈和源码片段。 |
-| 日志异常兜底 | 自动捕获 `Log::error(..., ['exception' => $e])` 这类只写日志的异常，避免队列 failed / 业务 catch 漏进云端。 |
+| 运行时异常监控 | 自动接入 Laravel 异常上报链路，记录异常类型、消息、文件行号、请求 URL、用户、调用栈和源码片段；并补采 `abort(500/502/503)` 等未进入上报链路的 HttpException 5xx。 |
+| 日志异常兜底 | 自动捕获 `Log::error(..., ['exception' => $e])`，以及 `Log::error($e)` / `Log::error('失败: '.$e->getMessage())` 这类「异常已被字符串化、只写日志」的形态，避免队列 failed / 业务 catch 漏进云端。 |
 | 队列失败捕获 | 监听 Laravel `JobFailed` 事件，把 connection、queue、job name、attempts 等失败上下文带进 runtime。 |
 | 慢 SQL 监控 | 监听 Laravel `QueryExecuted` 事件，超过阈值的 SQL 会被记录，包含执行耗时、SQL 内容、触发位置和请求信息。 |
 | 相同问题聚合 | 相同异常或相同慢 SQL 会按 hash 聚合，累计出现次数，避免同一个问题刷屏。 |
@@ -25,6 +25,29 @@ Laravel 后端监控采集 SDK，用来把项目里的 **运行时异常** 和 *
 | 云端推送 | 通过 `moo:cloud:push` 增量推送到 moo-scaffold-cloud，云端负责查看、告警和处置。 |
 | AI / MCP 辅助处理 | 可通过 `moo:cloud:mcp` 让 Claude Code / Codex 等工具读取云端 runtime 错误和待办，并回写处理状态。 |
 | 旧版迁移 | 支持从 `moo-scaffold <= 3.8` 的本地监控目录迁移到新目录。 |
+
+## 采集范围与边界
+
+监控的使命是「宿主发生的异常和错误，被精准检测并上报云端」。下面如实列出**覆盖的错误路径**与**已知边界**，接入方据此判断盲区、按需在 host 侧补齐。
+
+**覆盖的错误路径**
+
+- 未捕获异常冒泡到框架异常处理链（HTTP / console）；
+- 显式 `report($e)`；
+- `Log::error(..., ['exception' => $e])`（规范形态）与 `Log::error($e)` / `Log::error('...'.$e->getMessage())`（字符串化形态）；
+- `abort(500/502/503)` 与第三方包抛出的 HttpException 5xx（只读观察，不改宿主响应）；
+- 队列任务最终失败（`JobFailed`）与每次重试 attempt 抛出的异常；
+- 调度任务抛出的异常；
+- PHP warning / notice（框架已转 `ErrorException` 抛出，归入第一条）；
+- 慢 SQL（超过阈值的查询）。
+
+**已知边界（刻意不覆盖或暂无干净钩子）**
+
+- **自带 `report()` 方法的自定义异常**：Laravel 在 `reportable` 回调**之前**就执行异常自身的 `report()` 并短路（框架设计），没有干净钩子能完整兜住。缓解：HTTP 语境下冒泡到渲染层的仍可被 5xx 观察者看到；其 `report()` 内若写了 error 日志，日志兜底也能看到。剩余暴露面（console / 队列语境下 self-reporting 且不写日志）作为已知边界。
+- **服务提供者注册之前的 bootstrap 阶段异常**：采集钩子此时尚未挂上，属框架启动早期，修复收益与复杂度不成比例，不覆盖。
+- **deprecation 通知**：量大、非错误，Laravel 有独立的 deprecations 通道，采集只会制造噪音，故不采集。
+
+过滤（`dontReport` / 异常类白名单）沿用 Laravel 原生机制下沉到 host 层，本包不重复实现。
 
 ## 环境要求
 
