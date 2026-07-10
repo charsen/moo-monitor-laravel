@@ -24,6 +24,10 @@ return [
         // 脱敏关键字（URL query / payload 键名 / SQL 列名，子串匹配、大小写不敏感）
         'mask_keys' => ['password', 'pwd', 'token', 'secret', 'api_key', 'authorization'],
 
+        // 采集出错用户时依次尝试的 auth guard（命中第一个有登录用户的即用）。默认 admin/user/web；
+        // 宿主用 api / sanctum / 自定义 guard 时在此追加，否则采不到用户。
+        'auth_guards' => ['admin', 'user', 'web'],
+
         // payload 单字段截断长度
         'string_truncate' => 200,
 
@@ -89,6 +93,9 @@ return [
 
         // 脱敏关键字（同 runtime.mask_keys）
         'mask_keys' => ['password', 'pwd', 'token', 'secret', 'api_key', 'authorization'],
+
+        // 采集出错用户依次尝试的 auth guard（同 runtime.auth_guards）
+        'auth_guards' => ['admin', 'user', 'web'],
 
         // open 桶最大条数
         'max_open' => (int) env('MOO_MONITOR_SQL_SLOW_MAX_OPEN', 500),
