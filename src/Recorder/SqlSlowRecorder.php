@@ -57,45 +57,14 @@ class SqlSlowRecorder extends BucketedYamlRecorder
         try {
             $request ??= $this->resolveRequest();
             $hash = $this->makeHash($sqlRaw, $file, $line);
-            // 用记录实际所在桶判定（桶目录是 status 真源），而非 yaml 内 status 字段。
-            $bucket   = $this->findBucket($hash);
-            $existing = $bucket !== null ? $this->readFile($hash, $bucket) : null;
-            $now      = $this->nowIso();
-            $isNew    = false;
 
-            if ($existing && $bucket !== 'open') {
-                // resolved / deleted 桶里的同 hash 复发 → 搬回 open 复活（之前 deleted 漏处理会留跨桶重复）。
-                $this->moveFile($hash, $bucket, 'open');
-                $existing['status']        = 'open';
-                $existing['resolved_at']   = null;
-                $existing['resolved_by']   = null;
-                $existing['resolved_note'] = null;
-                $data                      = $this->refresh($existing, $sqlLast, $tookMs, $file, $line, $connection, $request, $now, $this->drainDailyOverflow($hash));
-            } elseif ($existing) {
-                // 当天已达写盘上限 → 冻结 yaml 不写盘（热慢查询 mtime 不变 → 不再每分钟被 push 反复推）；
-                // 但 overflow 计数器累加，真实次数不丢（P2-1），次日首次通过 cap 闸回填进 count。
-                if ($this->dailyCapReached($existing, $now)) {
-                    $this->bumpDailyOverflow($hash);
-
-                    return $hash;
-                }
-                $data = $this->refresh($existing, $sqlLast, $tookMs, $file, $line, $connection, $request, $now, $this->drainDailyOverflow($hash));
-            } else {
-                if ($this->openBucketFull()) {
-                    return null;
-                }
-                $data  = $this->build($hash, $sqlRaw, $sqlLast, $tookMs, $file, $line, $connection, $request, $now);
-                $isNew = true;
-            }
-
-            $this->ensureDir();
-            if (! $this->writeFile($hash, 'open', $data, $isNew)) {
-                $this->logWriteFailure($file, $line, $request);
-
-                return null;
-            }
-
-            return $hash;
+            // 聚合落盘骨架与 RuntimeErrorRecorder 共用基类 persistAggregated（桶目录是 status 真源）。
+            return $this->persistAggregated(
+                $hash,
+                fn (string $now)                                 => $this->build($hash, $sqlRaw, $sqlLast, $tookMs, $file, $line, $connection, $request, $now),
+                fn (array $existing, string $now, int $overflow) => $this->refresh($existing, $sqlLast, $tookMs, $file, $line, $connection, $request, $now, $overflow),
+                fn ()                                            => $this->logWriteFailure($file, $line, $request),
+            );
         } catch (Throwable $self) {
             // safeLog：日志写入本身也可能抛（database/slack 通道后端不可用），否则会逃出 record()
             // → 经 SqlSlowListener 冒泡进宿主查询执行。record() 对调用方只返回 string|null，永不抛。
