@@ -111,7 +111,7 @@ class NeverThrowsIntoHostTest extends TestCase
 
         $recorder = new class(sys_get_temp_dir() . '/never_throw', ['enabled' => true]) extends SqlSlowRecorder
         {
-            public function record(string $sqlRaw, string $sqlLast, float $tookMs, string $file, int $line, ?Request $request = null): ?string
+            public function record(string $sqlRaw, string $sqlLast, float $tookMs, string $file, int $line, ?string $connection = null, ?Request $request = null): ?string
             {
                 throw new RuntimeException('recorder exploded');
             }

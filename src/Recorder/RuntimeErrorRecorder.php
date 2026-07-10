@@ -531,13 +531,24 @@ class RuntimeErrorRecorder
             $full = substr($full, 0, $maxBytes) . "\n... (truncated)";
         }
 
+        // 应用帧前缀可配置（失真 F）：默认只认 app/ + routes/，Modules/、src/、database/ 布局的宿主
+        // 调用栈会全空。宿主按自己的目录布局配 runtime.app_frame_prefixes 即可。
+        $prefixes = array_values(array_filter(array_map('strval', (array) ($this->config['app_frame_prefixes'] ?? ['app/', 'routes/']))));
+
         $appFrames = [];
         foreach ($e->getTrace() as $frame) {
             if (! isset($frame['file'])) {
                 continue;
             }
-            $rel = $this->relPath($frame['file']);
-            if (! str_starts_with($rel, 'app/') && ! str_starts_with($rel, 'routes/')) {
+            $rel     = $this->relPath($frame['file']);
+            $matched = false;
+            foreach ($prefixes as $prefix) {
+                if ($prefix !== '' && str_starts_with($rel, $prefix)) {
+                    $matched = true;
+                    break;
+                }
+            }
+            if (! $matched) {
                 continue;
             }
             $appFrames[] = [

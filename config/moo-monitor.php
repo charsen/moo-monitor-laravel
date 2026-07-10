@@ -33,6 +33,10 @@ return [
         // 源码片段 ±N 行
         'snippet_lines' => 10,
 
+        // 调用栈里「算宿主业务代码」的相对路径前缀（trace.app_frames 过滤用）。默认只认 app/ + routes/；
+        // 用 Modules/、src/、database/ 等布局的宿主自行追加，否则这些帧不会进 app_frames。
+        'app_frame_prefixes' => ['app/', 'routes/'],
+
         // open 数缓存 TTL（秒）
         'cache_ttl' => (int) env('MOO_MONITOR_RUNTIME_CACHE_TTL', 30),
     ],

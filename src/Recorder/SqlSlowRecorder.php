@@ -59,6 +59,7 @@ class SqlSlowRecorder
         float $tookMs,
         string $file,
         int $line,
+        ?string $connection = null,
         ?Request $request = null
     ): ?string {
         if (! ($this->config['enabled'] ?? false)) {
@@ -81,19 +82,19 @@ class SqlSlowRecorder
                 $existing['resolved_at']   = null;
                 $existing['resolved_by']   = null;
                 $existing['resolved_note'] = null;
-                $data                      = $this->refresh($existing, $sqlLast, $tookMs, $file, $line, $request, $now);
+                $data                      = $this->refresh($existing, $sqlLast, $tookMs, $file, $line, $connection, $request, $now);
             } elseif ($existing) {
                 // 当天已达写盘上限 → 直接返回，不写盘（冻结 yaml：不刷 last_seen/不 +count/不刷 meta.updated_at）。
                 // 热慢查询冻结后 mtime 不变 → 不再每分钟被 moo:cloud:push 反复推。跟 RuntimeErrorRecorder 对齐。
                 if ($this->dailyCapReached($existing, $now)) {
                     return $hash;
                 }
-                $data = $this->refresh($existing, $sqlLast, $tookMs, $file, $line, $request, $now);
+                $data = $this->refresh($existing, $sqlLast, $tookMs, $file, $line, $connection, $request, $now);
             } else {
                 if ($this->openBucketFull()) {
                     return null;
                 }
-                $data  = $this->build($hash, $sqlRaw, $sqlLast, $tookMs, $file, $line, $request, $now);
+                $data  = $this->build($hash, $sqlRaw, $sqlLast, $tookMs, $file, $line, $connection, $request, $now);
                 $isNew = true;
             }
 
@@ -156,7 +157,7 @@ class SqlSlowRecorder
         $line         = 0;
         $tookMs       = (float) max(1, (int) ($this->config['threshold_ms'] ?? 100));
         $hash         = $this->makeHash($sqlRaw, $file, $line);
-        $data         = $this->build($hash, $sqlRaw, $sqlLast, $tookMs, $file, $line, null, $now);
+        $data         = $this->build($hash, $sqlRaw, $sqlLast, $tookMs, $file, $line, null, null, $now);
         $data['meta'] = ['updated_at' => $now];
 
         return $data;
@@ -199,6 +200,7 @@ class SqlSlowRecorder
         float $tookMs,
         string $file,
         int $line,
+        ?string $connection,
         ?Request $request,
         string $now
     ): array {
@@ -227,8 +229,9 @@ class SqlSlowRecorder
                 'threshold_ms' => (int) ($this->config['threshold_ms'] ?? 100),
             ],
             'at' => [
-                'file' => $this->relPath($file),
-                'line' => $line,
+                'file'       => $this->relPath($file),
+                'line'       => $line,
+                'connection' => $connection,
             ],
             'daily'   => ['date' => $this->today($now), 'count' => 1],
             'context' => $this->extractContext(),
@@ -242,6 +245,7 @@ class SqlSlowRecorder
         float $tookMs,
         string $file,
         int $line,
+        ?string $connection,
         ?Request $request,
         string $now
     ): array {
@@ -254,8 +258,9 @@ class SqlSlowRecorder
         $prevMax                       = (float) ($existing['took']['max_ms'] ?? 0);
         $existing['took']['max_ms']    = max($prevMax, round($tookMs, 2));
         $existing['at']                = [
-            'file' => $this->relPath($file),
-            'line' => $line,
+            'file'       => $this->relPath($file),
+            'line'       => $line,
+            'connection' => $connection,
         ];
         $existing['context'] = $this->extractContext();
         $existing['request'] = $this->extractRequest($request);
@@ -333,6 +338,7 @@ class SqlSlowRecorder
             'threshold_ms' => $data['took']['threshold_ms'] ?? 0,
             'file'         => $data['at']['file']           ?? '',
             'line'         => $data['at']['line']           ?? 0,
+            'connection'   => $data['at']['connection']     ?? null,
             'url'          => $data['request']['url']       ?? null,
             'method'       => $data['request']['method']    ?? null,
         ];
