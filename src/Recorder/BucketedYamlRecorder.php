@@ -1,23 +1,19 @@
 <?php declare(strict_types=1);
 
-namespace Mooeen\Monitor\Recorder\Concerns;
+namespace Mooeen\Monitor\Recorder;
 
+use Mooeen\Monitor\Concerns\SafelyLogs;
 use Symfony\Component\Yaml\Yaml;
 use Throwable;
 
 /**
- * 三桶（open/resolved/deleted）YAML 记录器的「管理 + 聚合 + 文件 IO」共享层。
+ * 三桶（open/resolved/deleted）YAML 记录器的抽象基类：管理 + 聚合 + 文件 IO + 每日写盘上限。
  *
- * RuntimeErrorRecorder / SqlSlowRecorder 是同骨架的两个 fork —— list/count/resolve/reopen/
- * delete/restore/purge/prune、ensureDir/path/readFile/allRows、relPath/nowIso/firstLine 等
- * 原本逐字拷两份（WritesBucketedYaml 的 docblock 早警告过「SqlSlow 一度从 Runtime 漂移」）。
- * 这里收口成单一真源，两个 recorder 只各留类型特有的 record/build/refresh/makeHash/extract* + deriveRow。
- *
- * 消费类须提供：
- *   - protected string $basePath / protected array $config
- *   - const CACHE_OPEN_COUNT(open 数缓存 key，各类型独立)
- *   - deriveRow(string $bucket, array $data): array（单条 yaml → 派生 row，字段各类型不同）
- *   - WritesBucketedYaml 的 writeFile/moveFile/deleteFile/find/countOpen（两个 recorder 都 use 了）
+ * RuntimeErrorRecorder / SqlSlowRecorder 是同骨架的两个 fork。原本靠三个互相引用的 trait
+ * （ManagesBucketedRecords / WritesBucketedYaml / TracksDailyCap）拼装，读一个方法要跳 3~4 个文件、
+ * 且靠 $this->config / $this->basePath / CACHE_OPEN_COUNT 常量 / 跨 trait 方法的隐式契约维系（明确反感的反模式）。
+ * P4 收口成单一抽象基类：基类持有状态、声明抽象 deriveRow()，子类只留类型特有的 record/build/refresh/
+ * makeHash/extract* + deriveRow。子类须提供 `public const CACHE_OPEN_COUNT`（open 数缓存 key，各类型独立）。
  *
  * 并发语义（刻意取舍，接入方须知）：record() 的 find→refresh(count+1)→writeFile 是无锁的
  * read-modify-write。多 worker / 队列在同一窗口命中同一 hash 时，后写者 last-write-wins 覆盖前写者，
@@ -30,8 +26,25 @@ use Throwable;
  * 计数器，次日首次写盘时回填进 count；cache 后端不可用/被清则溢出计数丢失、退回「count 偏低」——
  * 与上文近似计数语义一致（P1-7② 决议：不引入本地文件计数器兜底）。
  */
-trait ManagesBucketedRecords
+abstract class BucketedYamlRecorder
 {
+    use SafelyLogs;
+
+    protected string $basePath;
+
+    protected array $config;
+
+    /**
+     * 单条 yaml → list/count/prune 用的派生 row（字段各类型不同）。桶名为 status 唯一真源。
+     *
+     * @param array<string,mixed> $data
+     *
+     * @return array<string,mixed>
+     */
+    abstract protected function deriveRow(string $bucket, array $data): array;
+
+    // ── 桶管理 / 聚合 ─────────────────────────────────────────────────────
+
     /** 顶栏徽章缓存 TTL（秒），从 config 读，未配置回退到 30 */
     public function openCountCacheTtl(): int
     {
@@ -66,7 +79,7 @@ trait ManagesBucketedRecords
         try {
             if (function_exists('cache')) {
                 return (int) cache()->remember(
-                    self::CACHE_OPEN_COUNT,
+                    static::CACHE_OPEN_COUNT,
                     $this->openCountCacheTtl(),
                     fn () => $this->countOpen(),
                 );
@@ -126,8 +139,6 @@ trait ManagesBucketedRecords
     // purgeStatus()/pruneOlderThan()/pruneKeepLatest() 全无调用者，已删（死代码）。本地仅采集进 open/，经
     // moo:cloud:push 上云后由 CloudSync::pruneLocal 回收；moveFile(resolved→open) 仍保留作复发自动重开。
     // 留存的读 API:count()（顶栏/缓冲页）、get()/list()（读单条/列表，测试 + 内部用）。
-
-    // ── 文件 IO / 聚合 ───────────────────────────────────────────────────
 
     protected function ensureDir(): void
     {
@@ -221,14 +232,197 @@ trait ManagesBucketedRecords
     {
         try {
             if (function_exists('cache')) {
-                cache()->forget(self::CACHE_OPEN_COUNT);
+                cache()->forget(static::CACHE_OPEN_COUNT);
             }
         } catch (Throwable) {
             // ignore:CLI / 未启动 cache 时静默
         }
     }
 
-    // ── 工具 ─────────────────────────────────────────────────────────────
+    // ── 低层文件 IO 原语（原子写 + 三桶搬移）──────────────────────────────
+
+    protected function writeFile(string $key, string $bucket, array $data, bool $isNew = false): bool
+    {
+        // 写盘前刷 meta.updated_at，让 ScaffoldMergeYamlCommand 在多端 push 冲突时 last-write-wins 合并
+        $data['meta'] = array_merge($data['meta'] ?? [], ['updated_at' => $this->nowIso()]);
+        $yaml         = Yaml::dump(
+            $data,
+            8,
+            2,
+            Yaml::DUMP_MULTI_LINE_LITERAL_BLOCK | Yaml::DUMP_NULL_AS_TILDE
+        );
+        // 原子写：先写同目录临时文件，再 rename 覆盖（同 fs 的 rename 原子）。
+        // 防两种损坏：① 崩溃/磁盘满留半截或 0 字节 yaml；② 每分钟的 moo:cloud:push 进程读到
+        // 正在被重写的文件 → 解析失败被静默跳过 → 那条变更可能再不重试（唯一真实丢数据路径）。
+        // 并发同 hash 写各自用唯一临时名，rename 后最多 last-write-wins，但读者永远见到完整文件。
+        $target = $this->path($key, $bucket);
+        $tmp    = $target . '.tmp' . bin2hex(random_bytes(4));
+        $ok     = false;
+        if (@file_put_contents($tmp, $yaml) !== false) {
+            if (@rename($tmp, $target)) {
+                $ok = true;
+            } else {
+                @unlink($tmp);   // rename 失败（跨设备等罕见）→ 清理临时文件，原文件保持不动
+            }
+        }
+        // 只有「新建文件」才改变 open 桶文件数 → 才需让 open 数缓存失效。
+        // refresh 覆盖同名已存在文件不改变桶内文件数，在热点路径上 forget 是纯多余动作 ——
+        // 多 worker 并发下任一进程一写就清缓存，会让所有进程的下一次新建都得 glob 整个 open 桶。
+        if ($ok && $isNew) {
+            $this->forgetOpenCountCache();
+        }
+
+        return $ok;
+    }
+
+    protected function moveFile(string $key, string $from, string $to): bool
+    {
+        $src = $this->path($key, $from);
+        $dst = $this->path($key, $to);
+        if (! is_file($src)) {
+            return false;
+        }
+        $this->ensureDir();
+        $ok = @rename($src, $dst);
+        if ($ok) {
+            $this->forgetOpenCountCache();
+        }
+
+        return $ok;
+    }
+
+    private function find(string $key): ?array
+    {
+        return $this->readFile($key, 'open')
+            ?? $this->readFile($key, 'resolved')
+            ?? $this->readFile($key, 'deleted');
+    }
+
+    /**
+     * 返回该 hash 实际落在哪个桶（open → resolved → deleted 优先序），都不在返 null。
+     * record() 用它判定复发应从哪个桶搬回 open —— 比读 yaml 内 status 字段更可靠（桶目录是 status 真源）。
+     */
+    protected function findBucket(string $key): ?string
+    {
+        foreach (['open', 'resolved', 'deleted'] as $bucket) {
+            if (is_file($this->path($key, $bucket))) {
+                return $bucket;
+            }
+        }
+
+        return null;
+    }
+
+    private function countOpen(): int
+    {
+        $dir = $this->basePath . '/open';
+        if (! is_dir($dir)) {
+            return 0;
+        }
+
+        $n = 0;
+        foreach (glob($dir . '/*.yaml') ?: [] as $file) {
+            if ($this->isValidHash(basename($file, '.yaml'))) {
+                $n++;
+            }
+        }
+
+        return $n;
+    }
+
+    // ── 每日写盘上限（daily_cap）+ 冻结期溢出计数（P2-1）────────────────────
+
+    /** daily_cap：同一 hash 每天最多写盘次数；<=0 不限制。默认 10 */
+    protected function dailyCap(): int
+    {
+        return (int) ($this->config['daily_cap'] ?? 10);
+    }
+
+    /**
+     * 当天写盘次数是否已达上限。达到 → record() 跳过写盘（不刷 last_seen / 不 +count / 不刷 meta.updated_at）。
+     * 旧数据无 daily 字段 / daily.date 非今天 → 视为未达上限（次日翻篇归零）。
+     */
+    protected function dailyCapReached(array $existing, string $now): bool
+    {
+        $cap = $this->dailyCap();
+        if ($cap <= 0) {
+            return false;
+        }
+        $daily = $existing['daily'] ?? null;
+        if (! is_array($daily) || ($daily['date'] ?? null) !== $this->today($now)) {
+            return false;
+        }
+
+        return (int) ($daily['count'] ?? 0) >= $cap;
+    }
+
+    /** 递增当天计数；跨天（或旧数据无 daily）则归零重计为 1 */
+    protected function bumpDaily(?array $daily, string $now): array
+    {
+        $today = $this->today($now);
+        if (is_array($daily) && ($daily['date'] ?? null) === $today) {
+            return ['date' => $today, 'count' => (int) ($daily['count'] ?? 0) + 1];
+        }
+
+        return ['date' => $today, 'count' => 1];
+    }
+
+    /** 从 ISO-8601 取日期段 YYYY-MM-DD，沿用 last_seen 的本地时区 */
+    protected function today(string $iso): string
+    {
+        return substr($iso, 0, 10);
+    }
+
+    /** 冻结期溢出计数 +1（best-effort；cache 不可用则丢失，退回现状偏低）。 */
+    protected function bumpDailyOverflow(string $hash): void
+    {
+        try {
+            if (function_exists('cache')) {
+                $key = $this->overflowKey($hash);
+                // add 只在 key 不存在时落一个带 TTL 的 0，把 TTL 锚定到次日凌晨 1 点；随后 increment 累加。
+                cache()->add($key, 0, $this->overflowTtl());
+                cache()->increment($key);
+            }
+        } catch (Throwable) {
+            // best-effort：cache 后端不可用 → 溢出计数丢失，次日回填偏低（P1-7② 决议，不做本地文件计数器兜底）。
+        }
+    }
+
+    /** 读出并清空该 hash 的溢出计数（次日首次通过 cap 闸写盘时回填进 count）。cache 不可用 → 0。 */
+    protected function drainDailyOverflow(string $hash): int
+    {
+        try {
+            if (function_exists('cache')) {
+                $key = $this->overflowKey($hash);
+                $n   = (int) cache()->get($key, 0);
+                if ($n > 0) {
+                    cache()->forget($key);
+                }
+
+                return $n;
+            }
+        } catch (Throwable) {
+            // best-effort：cache 不可用 → 无回填
+        }
+
+        return 0;
+    }
+
+    /** overflow 缓存 key：复用各类型 open_count 缓存前缀（runtime / sql_slow 各自独立）。 */
+    private function overflowKey(string $hash): string
+    {
+        return str_replace(':open_count', '', static::CACHE_OPEN_COUNT) . ':overflow:' . $hash;
+    }
+
+    /** overflow key TTL（秒）到次日凌晨 1 点：当天溢出累积同一 key，次日回填后清；回填前过期只退回偏低。 */
+    private function overflowTtl(): int
+    {
+        $ttl = (int) (strtotime('tomorrow 01:00') - time());
+
+        return $ttl > 0 ? $ttl : 3600;
+    }
+
+    // ── 工具（子类共用）───────────────────────────────────────────────────
 
     protected function relPath(string $abs): string
     {
@@ -263,6 +457,20 @@ trait ManagesBucketedRecords
         return substr(trim($line), 0, 160);
     }
 
+    protected function extractUserName($user): ?string
+    {
+        if ($user === null) {
+            return null;
+        }
+        foreach (['real_name', 'name', 'username', 'mobile', 'email'] as $key) {
+            if (isset($user->{$key})) {
+                return (string) $user->{$key};
+            }
+        }
+
+        return null;
+    }
+
     /**
      * 解析当前 Request（console 语境感知，失真 C）。
      *
@@ -277,19 +485,5 @@ trait ManagesBucketedRecords
         }
 
         return function_exists('request') ? request() : null;
-    }
-
-    protected function extractUserName($user): ?string
-    {
-        if ($user === null) {
-            return null;
-        }
-        foreach (['real_name', 'name', 'username', 'mobile', 'email'] as $key) {
-            if (isset($user->{$key})) {
-                return (string) $user->{$key};
-            }
-        }
-
-        return null;
     }
 }
