@@ -86,6 +86,9 @@ class RuntimeErrorRecorder
             $existing = $bucket !== null ? $this->readFile($hash, $bucket) : null;
             $now      = $this->nowIso();
             $isNew    = false;
+            // 危险语境（fatal / 内存逼近上限，矩阵 #7）走 lean path：跳过 file() 整读 / payload 递归脱敏 /
+            // trace 五连正则，避免在只剩 32KB 保留内存的 shutdown 兜底里二次 OOM 把这条记录也吞掉。脱敏不降级。
+            $lean = $this->isDangerousContext($e);
 
             if ($existing && $bucket !== 'open') {
                 // resolved / deleted 桶里的同 hash 复发 → 搬回 open 复活 + count+1。
@@ -96,18 +99,18 @@ class RuntimeErrorRecorder
                 $existing['resolved_at']   = null;
                 $existing['resolved_by']   = null;
                 $existing['resolved_note'] = null;
-                $data                      = $this->refresh($existing, $e, $request, $now, $source, $meta);
+                $data                      = $this->refresh($existing, $e, $request, $now, $source, $meta, $lean);
             } elseif ($existing) {
                 // 当天已达写盘上限 → 直接返回，不写盘（冻结 yaml，不再产生 git diff → 止住爆仓）
                 if ($this->dailyCapReached($existing, $now)) {
                     return $hash;
                 }
-                $data = $this->refresh($existing, $e, $request, $now, $source, $meta);
+                $data = $this->refresh($existing, $e, $request, $now, $source, $meta, $lean);
             } else {
                 if ($this->openBucketFull()) {
                     return null;
                 }
-                $data  = $this->build($hash, $e, $request, $now, $source, $meta);
+                $data  = $this->build($hash, $e, $request, $now, $source, $meta, $lean);
                 $isNew = true;
             }
 
@@ -272,7 +275,7 @@ class RuntimeErrorRecorder
     /**
      * @param array<string,mixed> $meta
      */
-    private function build(string $hash, Throwable $e, ?Request $request, string $now, string $source = 'reportable', array $meta = []): array
+    private function build(string $hash, Throwable $e, ?Request $request, string $now, string $source = 'reportable', array $meta = [], bool $lean = false): array
     {
         return [
             'hash'           => $hash,
@@ -284,32 +287,32 @@ class RuntimeErrorRecorder
             'resolved_at'    => null,
             'resolved_by'    => null,
             'resolved_note'  => null,
-            'exception'      => $this->extractException($e),
-            'request'        => $this->extractRequest($request),
+            'exception'      => $this->extractException($e, $lean),
+            'request'        => $lean ? $this->leanRequest($request) : $this->extractRequest($request),
             'context'        => $this->extractContext(),
-            'trace'          => $this->extractTrace($e),
-            'source_snippet' => $this->extractSourceSnippet($e->getFile(), $e->getLine()),
-            'payload'        => $this->extractPayload($request),
-            'meta'           => $this->runtimeMeta($source, $meta),
+            'trace'          => $lean ? $this->leanTrace($e) : $this->extractTrace($e),
+            'source_snippet' => $lean ? $this->leanSnippet($e) : $this->extractSourceSnippet($e->getFile(), $e->getLine()),
+            'payload'        => $lean ? [] : $this->extractPayload($request),
+            'meta'           => $this->runtimeMeta($source, $lean ? $meta + ['lean' => true] : $meta),
         ];
     }
 
     /**
      * @param array<string,mixed> $meta
      */
-    private function refresh(array $existing, Throwable $e, ?Request $request, string $now, string $source = 'reportable', array $meta = []): array
+    private function refresh(array $existing, Throwable $e, ?Request $request, string $now, string $source = 'reportable', array $meta = [], bool $lean = false): array
     {
         $existing['last_seen'] = $now;
         $existing['count']     = (int) ($existing['count'] ?? 0) + 1;
         $existing['daily']     = $this->bumpDaily($existing['daily'] ?? null, $now);
-        // 覆盖末次 request / payload / trace（保留 first_seen 不变）
-        $existing['exception']      = $this->extractException($e);
-        $existing['request']        = $this->extractRequest($request);
+        // 覆盖末次 request / payload / trace（保留 first_seen 不变）；lean 语境下同样降级采集。
+        $existing['exception']      = $this->extractException($e, $lean);
+        $existing['request']        = $lean ? $this->leanRequest($request) : $this->extractRequest($request);
         $existing['context']        = $this->extractContext();
-        $existing['trace']          = $this->extractTrace($e);
-        $existing['source_snippet'] = $this->extractSourceSnippet($e->getFile(), $e->getLine());
-        $existing['payload']        = $this->extractPayload($request);
-        $existing['meta']           = $this->runtimeMeta($source, $meta, is_array($existing['meta'] ?? null) ? $existing['meta'] : []);
+        $existing['trace']          = $lean ? $this->leanTrace($e) : $this->extractTrace($e);
+        $existing['source_snippet'] = $lean ? $this->leanSnippet($e) : $this->extractSourceSnippet($e->getFile(), $e->getLine());
+        $existing['payload']        = $lean ? [] : $this->extractPayload($request);
+        $existing['meta']           = $this->runtimeMeta($source, $lean ? $meta + ['lean' => true] : $meta, is_array($existing['meta'] ?? null) ? $existing['meta'] : []);
 
         return $existing;
     }
@@ -352,17 +355,81 @@ class RuntimeErrorRecorder
         return mb_substr($source !== '' ? $source : 'reportable', 0, 64);
     }
 
-    private function extractException(Throwable $e): array
+    private function extractException(Throwable $e, bool $lean = false): array
     {
+        // lean 语境（fatal/OOM）：先截 512 再脱敏 —— 脱敏不降级，只是把正则跑在短串上省内存。
+        $message = $lean ? mb_substr($e->getMessage(), 0, 512) : $e->getMessage();
+
         return [
             'class' => get_class($e),
             'code'  => (string) $e->getCode(),
             // QueryException 的 message 嵌着带 binding 值的 SQL(WHERE token='…')→ maskSensitiveSql;
             // 再叠 maskSecrets 兜住应用写进 message 的 JWT / Bearer / 裸密钥（非 SQL 形态）。
-            'message' => $this->maskSecrets($this->maskSensitiveSql($e->getMessage())),
+            'message' => $this->maskSecrets($this->maskSensitiveSql($message)),
             'file'    => $this->relPath($e->getFile()),
             'line'    => $e->getLine(),
         ];
+    }
+
+    /**
+     * 危险语境探测（矩阵 #7）：命中则 record() 走 lean path。
+     * ① Laravel shutdown 兜底把 fatal/OOM 包成 FatalError（vendor HandleExceptions.php:251）；
+     * ② 已用内存逼近 memory_limit（>0.9）—— 再跑重采集路径极易二次耗尽。memory_limit=-1 视为无限、不触发。
+     */
+    private function isDangerousContext(Throwable $e): bool
+    {
+        if ($e instanceof \Symfony\Component\ErrorHandler\Error\FatalError) {
+            return true;
+        }
+        $limit = $this->memoryLimitBytes();
+
+        return $limit > 0 && memory_get_usage(true) / $limit > 0.9;
+    }
+
+    /** 解析 ini memory_limit 为字节；-1 / 空 / 非法 → 0（视为无限制，不触发内存比率判定）。 */
+    private function memoryLimitBytes(): int
+    {
+        $raw = strtolower(trim((string) ini_get('memory_limit')));
+        if ($raw === '' || $raw === '-1') {
+            return 0;
+        }
+        $num  = (int) $raw;
+        $unit = substr($raw, -1);
+
+        return match ($unit) {
+            'g'     => $num * 1024 * 1024 * 1024,
+            'm'     => $num * 1024 * 1024,
+            'k'     => $num * 1024,
+            default => $num,
+        };
+    }
+
+    /** lean request：只留 method / url（url 仍走 maskUrl，脱敏不降级），丢 ip/user/guard 采集。 */
+    private function leanRequest(?Request $request): array
+    {
+        if ($request === null) {
+            return ['method' => 'CLI', 'url' => null];
+        }
+
+        return [
+            'method' => $request->getMethod(),
+            'url'    => $this->maskUrl($request->fullUrl()),
+        ];
+    }
+
+    /** lean trace：getTraceAsString 直接截 4KB，只做 maskSecrets 单遍，不叠 SQL 脱敏、不扫 app_frames。 */
+    private function leanTrace(Throwable $e): array
+    {
+        return [
+            'full'       => $this->maskSecrets(substr($e->getTraceAsString(), 0, 4096)),
+            'app_frames' => [],
+        ];
+    }
+
+    /** lean snippet：跳过 file() 整读，只留定位信息。 */
+    private function leanSnippet(Throwable $e): array
+    {
+        return ['file' => $this->relPath($e->getFile()), 'line' => $e->getLine(), 'language' => 'php', 'code' => ''];
     }
 
     private function extractRequest(?Request $request): array
