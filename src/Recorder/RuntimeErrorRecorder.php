@@ -78,7 +78,7 @@ class RuntimeErrorRecorder
         }
 
         try {
-            $request ??= function_exists('request') ? request() : null;
+            $request ??= $this->resolveRequest();
             $hash = $this->makeHash($e);
             // 用「记录实际所在的桶」而非 yaml 内 status 字段判定 —— 桶目录是 status 的唯一真源
             // (deriveRow 同设计)，迁移来的旧 yaml 可能 status 字段与落盘桶不一致。

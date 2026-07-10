@@ -263,6 +263,22 @@ trait ManagesBucketedRecords
         return substr(trim($line), 0, 160);
     }
 
+    /**
+     * 解析当前 Request（console 语境感知，失真 C）。
+     *
+     * console / 队列 worker 下 request() 从容器解析出的是**空 Request 对象而非 null** —— 直接用它会把
+     * CLI 语境的异常 / 慢查询误标成 GET http://…（extractRequest 的 CLI 分支几乎不可达）。故
+     * runningInConsole 时返回 null，走真正的 CLI 分支；HTTP 语境才解析真实 request。显式传入优先（调用方 ??=）。
+     */
+    protected function resolveRequest(): ?\Illuminate\Http\Request
+    {
+        if (function_exists('app') && app()->runningInConsole()) {
+            return null;
+        }
+
+        return function_exists('request') ? request() : null;
+    }
+
     protected function extractUserName($user): ?string
     {
         if ($user === null) {

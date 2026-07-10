@@ -67,7 +67,7 @@ class SqlSlowRecorder
         }
 
         try {
-            $request ??= function_exists('request') ? request() : null;
+            $request ??= $this->resolveRequest();
             $hash = $this->makeHash($sqlRaw, $file, $line);
             // 用记录实际所在桶判定（桶目录是 status 真源），而非 yaml 内 status 字段。
             $bucket   = $this->findBucket($hash);
