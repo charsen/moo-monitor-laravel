@@ -82,14 +82,16 @@ class SqlSlowRecorder
                 $existing['resolved_at']   = null;
                 $existing['resolved_by']   = null;
                 $existing['resolved_note'] = null;
-                $data                      = $this->refresh($existing, $sqlLast, $tookMs, $file, $line, $connection, $request, $now);
+                $data                      = $this->refresh($existing, $sqlLast, $tookMs, $file, $line, $connection, $request, $now, $this->drainDailyOverflow($hash));
             } elseif ($existing) {
-                // 当天已达写盘上限 → 直接返回，不写盘（冻结 yaml：不刷 last_seen/不 +count/不刷 meta.updated_at）。
-                // 热慢查询冻结后 mtime 不变 → 不再每分钟被 moo:cloud:push 反复推。跟 RuntimeErrorRecorder 对齐。
+                // 当天已达写盘上限 → 冻结 yaml 不写盘（热慢查询 mtime 不变 → 不再每分钟被 push 反复推）；
+                // 但 overflow 计数器累加，真实次数不丢（P2-1），次日首次通过 cap 闸回填进 count。
                 if ($this->dailyCapReached($existing, $now)) {
+                    $this->bumpDailyOverflow($hash);
+
                     return $hash;
                 }
-                $data = $this->refresh($existing, $sqlLast, $tookMs, $file, $line, $connection, $request, $now);
+                $data = $this->refresh($existing, $sqlLast, $tookMs, $file, $line, $connection, $request, $now, $this->drainDailyOverflow($hash));
             } else {
                 if ($this->openBucketFull()) {
                     return null;
@@ -247,11 +249,13 @@ class SqlSlowRecorder
         int $line,
         ?string $connection,
         ?Request $request,
-        string $now
+        string $now,
+        int $overflow = 0
     ): array {
-        $maskedLast                    = $this->maskSecrets($this->maskSensitiveSql($sqlLast));
-        $existing['last_seen']         = $now;
-        $existing['count']             = (int) ($existing['count'] ?? 0) + 1;
+        $maskedLast            = $this->maskSecrets($this->maskSensitiveSql($sqlLast));
+        $existing['last_seen'] = $now;
+        // count += 1 本次 + overflow 前日冻结期累积的真实发生次数（P2-1，overflow 通常为 0）
+        $existing['count']             = (int) ($existing['count'] ?? 0) + 1 + max(0, $overflow);
         $existing['sql']['last']       = $this->truncate($maskedLast, 4096);
         $existing['sql']['last_bytes'] = $this->strLen($maskedLast);
         $existing['took']['last_ms']   = round($tookMs, 2);
