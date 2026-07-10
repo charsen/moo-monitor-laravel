@@ -13,7 +13,7 @@ use Throwable;
  * 把 listener 捕到的慢 SQL 落盘到 storage_path('moo-monitor/sql-slows/{open,resolved,deleted}/<hash>.yaml'),
  * 同 hash(normalized sql + file:line)累加 count、刷新 last_seen、保留 max_took_ms。
  *
- * 三桶管理 / 聚合 / 文件 IO 在 ManagesBucketedRecords trait（与 RuntimeErrorRecorder 共用）；
+ * 三桶管理 / 聚合 / 文件 IO / 聚合落盘骨架在抽象基类 BucketedYamlRecorder（与 RuntimeErrorRecorder 共用）；
  * 这里只留慢 SQL 特有的 record / build / refresh / makeHash / extract* + deriveRow。
  * 数据字段精简到 SQL 场景需要的部分（无 trace / payload / source_snippet）。
  */
