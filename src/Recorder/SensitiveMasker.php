@@ -1,21 +1,33 @@
 <?php declare(strict_types=1);
 
-namespace Mooeen\Monitor\Recorder\Concerns;
+namespace Mooeen\Monitor\Recorder;
 
 /**
- * URL 脱敏：把 query string 里命中 mask_keys 的参数值替成 ***。
+ * 敏感信息脱敏。
  *
- * RuntimeErrorRecorder 与 SqlSlowRecorder 共用 —— 保证两条采集链路对密钥类 query 参数
- * (token / secret / api_key …)一致脱敏后再落盘 / 推云端，避免「runtime 脱了、慢 SQL 没脱」
- * 这种泄露面不一致。依赖宿主类有 $this->config['mask_keys']（数组，子串匹配、大小写不敏感）。
+ * 原 MasksSensitiveUrl trait 名不副实（实管四类：URL query / SQL 值侧 / INSERT 列 / JWT+Bearer），
+ * 且靠 $this->config['mask_keys'] 隐式契约。P4 独立成 final class：构造器注入 mask_keys（子串匹配、
+ * 大小写不敏感），去掉隐式契约、可纯单测。RuntimeErrorRecorder / SqlSlowRecorder 各持一个实例 ——
+ * 保证两条采集链路对密钥类参数一致脱敏后再落盘 / 推云端，避免「runtime 脱了、慢 SQL 没脱」的泄露面不一致。
  */
-trait MasksSensitiveUrl
+final class SensitiveMasker
 {
+    /** @var array<int,string> */
+    private array $maskKeys;
+
+    /**
+     * @param array<int,mixed> $maskKeys 子串匹配、大小写不敏感
+     */
+    public function __construct(array $maskKeys)
+    {
+        $this->maskKeys = array_values(array_filter(array_map('strval', $maskKeys)));
+    }
+
     /**
      * 把 url query 里命中 mask_keys 的参数值替为 ***，scheme/host/path/fragment 原样保留。
      * 命中规则：大小写不敏感、子串匹配（'token' 命中 'access_token'）。
      */
-    protected function maskUrl(string $url): string
+    public function maskUrl(string $url): string
     {
         $qPos = strpos($url, '?');
         if ($qPos === false) {
@@ -56,9 +68,9 @@ trait MasksSensitiveUrl
      *   `WHERE api_token = 'sk-live-…'` / `password='x'` / `secret IN ('a','b')` → 列名后的字面量替 ***。
      * 列名按 mask_keys 子串匹配（同 shouldMaskKey）。sql_raw(? 占位形态)不含字面值，无需脱敏。
      */
-    protected function maskSensitiveSql(string $text): string
+    public function maskSensitiveSql(string $text): string
     {
-        $keys = array_filter(array_map('strval', (array) ($this->config['mask_keys'] ?? [])));
+        $keys = $this->maskKeys;
         if ($keys === [] || $text === '') {
             return $text;
         }
@@ -77,7 +89,7 @@ trait MasksSensitiveUrl
      * SQL 形态，但应用常把 JWT / Bearer token / 裸密钥直接写进 message 或当函数参数进 trace。
      * 这里补：① JWT(eyJ.xxx.yyy)② Bearer <token> ③ 键名命中 mask_keys 的 key:value / key=value。
      */
-    protected function maskSecrets(string $text): string
+    public function maskSecrets(string $text): string
     {
         if ($text === '') {
             return $text;
@@ -90,7 +102,7 @@ trait MasksSensitiveUrl
         // ② Bearer <token>
         $text = preg_replace('/\bBearer\s+[A-Za-z0-9._\-]+/i', 'Bearer ***', $text) ?? $text;
         // ③ key: value / key = value（键名命中 mask_keys，值打码）
-        $keys = array_filter(array_map('strval', (array) ($this->config['mask_keys'] ?? [])));
+        $keys = $this->maskKeys;
         if ($keys !== []) {
             $alt  = implode('|', array_map(static fn ($k) => preg_quote($k, '/'), $keys));
             $text = preg_replace(
@@ -104,14 +116,13 @@ trait MasksSensitiveUrl
     }
 
     /**
-     * key 是否命中 mask_keys（子串、大小写不敏感）。maskRecursive(payload 脱敏)也复用本判断。
+     * key 是否命中 mask_keys（子串、大小写不敏感）。payload 脱敏（maskRecursive）也复用本判断。
      */
-    protected function shouldMaskKey(string $key): bool
+    public function shouldMaskKey(string $key): bool
     {
-        $keys  = (array) ($this->config['mask_keys'] ?? []);
         $lower = strtolower($key);
-        foreach ($keys as $needle) {
-            if (str_contains($lower, strtolower((string) $needle))) {
+        foreach ($this->maskKeys as $needle) {
+            if (str_contains($lower, strtolower($needle))) {
                 return true;
             }
         }
