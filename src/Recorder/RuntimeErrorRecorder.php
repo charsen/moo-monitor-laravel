@@ -360,7 +360,7 @@ class RuntimeErrorRecorder
         // lean 语境（fatal/OOM）：先截 512 再脱敏 —— 脱敏不降级，只是把正则跑在短串上省内存。
         $message = $lean ? mb_substr($e->getMessage(), 0, 512) : $e->getMessage();
 
-        return [
+        $out = [
             'class' => get_class($e),
             'code'  => (string) $e->getCode(),
             // QueryException 的 message 嵌着带 binding 值的 SQL(WHERE token='…')→ maskSensitiveSql;
@@ -369,6 +369,39 @@ class RuntimeErrorRecorder
             'file'    => $this->relPath($e->getFile()),
             'line'    => $e->getLine(),
         ];
+
+        // 异常链 previous（失真 E）：包装异常（QueryException 里的 PDOException 等）丢根因 —— 采最多 3 层。
+        // hash 仍按最外层算（聚合稳定性不变），云端契约只增可选字段。lean 语境省略（减内存分配）。
+        if (! $lean) {
+            $previous = $this->extractPrevious($e);
+            if ($previous !== []) {
+                $out['previous'] = $previous;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * 异常链（getPrevious）最多 3 层，每层同款双层脱敏；第 4 层及以下截断。
+     *
+     * @return array<int,array{class:string,message:string,file:string,line:int}>
+     */
+    private function extractPrevious(Throwable $e): array
+    {
+        $chain = [];
+        $prev  = $e->getPrevious();
+        while ($prev !== null && count($chain) < 3) {
+            $chain[] = [
+                'class'   => get_class($prev),
+                'message' => $this->maskSecrets($this->maskSensitiveSql($prev->getMessage())),
+                'file'    => $this->relPath($prev->getFile()),
+                'line'    => $prev->getLine(),
+            ];
+            $prev = $prev->getPrevious();
+        }
+
+        return $chain;
     }
 
     /**
