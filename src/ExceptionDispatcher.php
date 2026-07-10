@@ -42,57 +42,42 @@ class ExceptionDispatcher
      */
     public function dispatch(Throwable $e, ?Request $request = null, string $source = 'reportable', array $meta = []): void
     {
-        // 防双计的 WeakMap 标记放在 try 之前：它必须先生效（否则抛错-重试会双计），
-        // 且 isset/赋值本身不会抛。其余主体全部进 try —— request()/config()/跳过判断都要从容器
-        // 解析服务，而异常上报正发生在容器/请求状态不一定健康的时刻，任一处抛错都会冒泡进宿主
-        // 的 reportable 链、顶替掉 renderException(MonitorProvider 把 dispatch 无保护地挂了上去)。
-        if (isset($this->dispatched[$e])) {
-            $previous = (string) ($this->dispatched[$e]['source'] ?? 'reportable');
-            if ($this->sourcePriority($source) > $this->sourcePriority($previous)) {
-                $this->dispatched[$e] = ['source' => $source];
-                $this->tagRuntimeSource($e, $source, $meta);
+        // 防双计的 WeakMap 标记放在 try 之前：它必须先生效（否则抛错-重试会双计），isset/赋值本身不抛。
+        // 首见即标记；重复且来源优先级更高才更新 source（tagSource 升级路径）。
+        $repeat  = isset($this->dispatched[$e]);
+        $upgrade = $repeat && $this->sourcePriority($source) > $this->sourcePriority((string) ($this->dispatched[$e]['source'] ?? 'reportable'));
+        if (! $repeat || $upgrade) {
+            $this->dispatched[$e] = ['source' => $source];
+        }
+
+        // 单一总闸（P4）：tagSource 升级路径与 record 落盘路径同处一个 try —— 采集链路对宿主的硬保证是
+        // 「永不抛」。config()/request()/落盘 都要从容器解析，而异常上报正发生在容器/请求状态不一定健康的
+        // 时刻，任一处抛错都会冒泡进宿主 reportable 链、顶替掉 renderException。safeLog 自身也绝不抛。
+        try {
+            if ($repeat) {
+                // 同一异常对象再次进来（auto_hook + 手动接入并存，或多入口）：只升级 source，不重复计数。
+                if ($upgrade) {
+                    app(RuntimeErrorRecorder::class)->tagSource($e, $source, $meta);
+                }
+
+                return;
             }
 
-            return;
-        }
-        $this->dispatched[$e] = ['source' => $source];
-
-        try {
-            // 不在此解析 request（失真 C）：console / 队列 worker 下 request() 会解析出空 Request 对象而非 null，
-            // 误标成 GET http://…。这里只转发显式传入的 request（或 null），由 RuntimeErrorRecorder::record
-            // 统一做 console 语境感知的解析（runningInConsole → null → 真正的 CLI 分支）。
             if (! (bool) config('moo-monitor.runtime.enabled', true)) {
                 return;
             }
-
             if ((bool) config('moo-monitor.exception.cli_experiment_skip', true) && $this->isCliExperiment($e)) {
                 return;
             }
-
             if ((bool) config('moo-monitor.exception.console_input_skip', true) && $this->isConsoleInputError($e)) {
                 return;
             }
 
-            // 仅落盘；邮件/钉钉/企微通知由云端在 intake 时触发。
-            $this->dispatchRuntime($e, $request, $source, $meta);
+            // 仅落盘（邮件/钉钉/企微通知由云端 intake 触发）；request 传显式值或 null，由 record 做 console 感知解析。
+            // 落盘失败的诊断由 RuntimeErrorRecorder 自己记（它才分得清「写失败」与「按规则跳过」）。
+            app(RuntimeErrorRecorder::class)->record($e, $request, $source, $meta);
         } catch (Throwable $self) {
-            // 兜底：dispatch 对宿主的硬保证是「永不抛」。safeLog 自身也绝不抛（日志后端可能正不可用）。
             $this->safeLog('error', 'exception-dispatcher failed: ' . $self->getMessage(), [
-                'origin_class' => get_class($e),
-                'origin_at'    => $e->getFile() . ':' . $e->getLine(),
-            ]);
-        }
-    }
-
-    /**
-     * @param array<string,mixed> $meta
-     */
-    private function tagRuntimeSource(Throwable $e, string $source, array $meta): void
-    {
-        try {
-            app(RuntimeErrorRecorder::class)->tagSource($e, $source, $meta);
-        } catch (Throwable $self) {
-            $this->safeLog('error', 'exception-dispatcher runtime source tag failed: ' . $self->getMessage(), [
                 'origin_class' => get_class($e),
                 'origin_at'    => $e->getFile() . ':' . $e->getLine(),
             ]);
@@ -103,22 +88,6 @@ class ExceptionDispatcher
     {
         // source 优先级真源在 RuntimeErrorRecorder::SOURCE_PRIORITY（P2-2 收口）；此处复用同一语义，不再各持一份。
         return RuntimeErrorRecorder::sourceRank($source);
-    }
-
-    /**
-     * @param array<string,mixed> $meta
-     */
-    private function dispatchRuntime(Throwable $e, ?Request $request, string $source, array $meta): void
-    {
-        try {
-            // 落盘失败的诊断由 RuntimeErrorRecorder 自己记（它才分得清「写失败」与「按规则跳过」）。
-            app(RuntimeErrorRecorder::class)->record($e, $request, $source, $meta);
-        } catch (Throwable $self) {
-            $this->safeLog('error', 'exception-dispatcher runtime channel failed: ' . $self->getMessage(), [
-                'origin_class' => get_class($e),
-                'origin_at'    => $e->getFile() . ':' . $e->getLine(),
-            ]);
-        }
     }
 
     /**
