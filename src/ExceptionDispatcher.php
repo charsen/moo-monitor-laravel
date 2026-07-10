@@ -102,6 +102,7 @@ class ExceptionDispatcher
     {
         return match ($source) {
             'queue_failed' => 30,
+            'http_5xx'     => 25,
             'log_context'  => 20,
             'log_message'  => 15,
             'reportable'   => 10,
