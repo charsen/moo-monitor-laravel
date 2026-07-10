@@ -58,8 +58,9 @@ class ExceptionDispatcher
         $this->dispatched[$e] = ['source' => $source];
 
         try {
-            $request ??= function_exists('request') ? request() : null;
-
+            // 不在此解析 request（失真 C）：console / 队列 worker 下 request() 会解析出空 Request 对象而非 null，
+            // 误标成 GET http://…。这里只转发显式传入的 request（或 null），由 RuntimeErrorRecorder::record
+            // 统一做 console 语境感知的解析（runningInConsole → null → 真正的 CLI 分支）。
             if (! (bool) config('moo-monitor.runtime.enabled', true)) {
                 return;
             }
