@@ -160,6 +160,18 @@ class MonitorProvider extends ServiceProvider
             });
         }
 
+        // 调度任务非零退出码（矩阵 #11，P1-7① 已拍板）：exec 型任务不抛异常、只以退出码表示失败，
+        // 过去完全不可见。监听两个完成事件（后台任务经 schedule:finish 回填退出码后发 Background 版，
+        // 两个都要接），退出码为非 0 整数时合成 ScheduledTaskExit 记一条。回调任务抛异常走
+        // ScheduledTaskFailed 分支、不再发 Finished（vendor 已验证），故与异常路径不重叠。
+        if ((bool) config('moo-monitor.exception.schedule_exit_hook', true)) {
+            $onScheduledFinish = function ($event): void {
+                $this->recordScheduledExit($event);
+            };
+            Event::listen(\Illuminate\Console\Events\ScheduledTaskFinished::class, $onScheduledFinish);
+            Event::listen(\Illuminate\Console\Events\ScheduledBackgroundTaskFinished::class, $onScheduledFinish);
+        }
+
         // 云端推送：cloud.enabled + cloud.schedule 同时为真时，自动挂每分钟调度（需宿主跑 schedule:run）。
         // 仅 console 注册（scheduler 只在 CLI 生效）；用 booted 确保 Schedule 已可解析。
         if ($this->app->runningInConsole()) {
@@ -203,6 +215,38 @@ class MonitorProvider extends ServiceProvider
         } catch (Throwable) {
             return null;
         }
+    }
+
+    /**
+     * 调度完成事件 → 非零退出码合成 schedule_exit 记录。exitCode 非 int（未知）或 0（成功）不采。
+     *
+     * @param \Illuminate\Console\Events\ScheduledTaskFinished|\Illuminate\Console\Events\ScheduledBackgroundTaskFinished $event
+     */
+    private function recordScheduledExit(object $event): void
+    {
+        $task = $event->task ?? null;
+        if ($task === null) {
+            return;
+        }
+        $code = $task->exitCode ?? null;
+        // null = 退出码未知（视为不确定，不采）；0 = 成功。仅非零整数才合成记录。
+        if (! is_int($code) || $code === 0) {
+            return;
+        }
+
+        $summary = (string) $this->safeJobValue(fn () => method_exists($task, 'getSummaryForDisplay') ? $task->getSummaryForDisplay() : '');
+        $summary = $summary !== '' ? $summary : 'unknown';
+        // 退出码进 message：normalizeMessage 把数字归一为 N，同一 command 不同退出码聚合到同一 hash。
+        $message = '调度任务退出码非零：' . mb_substr($summary, 0, 300) . ' (exit ' . $code . ')';
+
+        $meta = ['command' => mb_substr($summary, 0, 500), 'exit_code' => $code];
+        if (isset($event->runtime)) {
+            $meta['runtime'] = round((float) $event->runtime, 2);
+        }
+
+        // file 用合成标记（非真实源文件）：source_snippet 自然取空、所有 schedule_exit 共桶按 command 聚合。
+        $synthetic = new \Mooeen\Monitor\ScheduledTaskExit($message, 'moo-monitor/schedule', 0);
+        $this->app->make(ExceptionDispatcher::class)->dispatch($synthetic, source: 'schedule_exit', meta: $meta);
     }
 
     /**
