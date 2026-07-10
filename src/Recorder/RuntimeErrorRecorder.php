@@ -7,7 +7,6 @@ namespace Mooeen\Monitor\Recorder;
 use Illuminate\Http\Request;
 use Mooeen\Monitor\Concerns\SafelyLogs;
 use Mooeen\Monitor\Recorder\Concerns\ManagesBucketedRecords;
-use Mooeen\Monitor\Recorder\Concerns\MasksSensitiveUrl;
 use Mooeen\Monitor\Recorder\Concerns\TracksDailyCap;
 use Mooeen\Monitor\Recorder\Concerns\WritesBucketedYaml;
 use Mooeen\Monitor\SelfTestException;
@@ -32,7 +31,6 @@ use Throwable;
 class RuntimeErrorRecorder
 {
     use ManagesBucketedRecords;
-    use MasksSensitiveUrl;
     use SafelyLogs;
     use TracksDailyCap;
     use WritesBucketedYaml;
@@ -44,11 +42,14 @@ class RuntimeErrorRecorder
 
     private array $config;
 
+    private SensitiveMasker $masker;
+
     public function __construct(?string $basePath = null, ?array $config = null)
     {
         $this->config   = $config ?? (array) config('moo-monitor.runtime', []);
         $path           = (string) ($this->config['path'] ?? 'moo-monitor/runtimes');
         $this->basePath = $basePath ?? self::resolveStoragePath($path);
+        $this->masker   = new SensitiveMasker((array) ($this->config['mask_keys'] ?? []));
     }
 
     /** 配置路径解析：绝对路径原样用；相对路径挂在 storage_path() 下（无 Laravel 环境时原样） */
@@ -157,7 +158,7 @@ class RuntimeErrorRecorder
             'owner'    => is_dir($openDir) ? @fileowner($openDir) : null,
             'php_uid'  => function_exists('posix_geteuid') ? posix_geteuid() : null,
             'origin'   => get_class($origin),
-            'url'      => $request !== null ? $this->maskUrl($request->fullUrl()) : null,
+            'url'      => $request !== null ? $this->masker->maskUrl($request->fullUrl()) : null,
         ]);
     }
 
@@ -269,7 +270,7 @@ class RuntimeErrorRecorder
      */
     private function normalizeMessage(string $msg): string
     {
-        $msg = $this->maskSecrets($this->maskSensitiveSql($msg));
+        $msg = $this->masker->maskSecrets($this->masker->maskSensitiveSql($msg));
         $msg = preg_replace("/'[^']*'/", "'X'", $msg) ?? $msg;
         $msg = preg_replace('/"[^"]*"/', '"X"', $msg) ?? $msg;
         // UUID / 0x 内存地址 / 长 hex(token、hash 片段)→ 占位 —— 否则同一异常因 message 里可变的
@@ -421,7 +422,7 @@ class RuntimeErrorRecorder
             'code'  => (string) $e->getCode(),
             // QueryException 的 message 嵌着带 binding 值的 SQL(WHERE token='…')→ maskSensitiveSql;
             // 再叠 maskSecrets 兜住应用写进 message 的 JWT / Bearer / 裸密钥（非 SQL 形态）。
-            'message' => $this->maskSecrets($this->maskSensitiveSql($message)),
+            'message' => $this->masker->maskSecrets($this->masker->maskSensitiveSql($message)),
             'file'    => $this->relPath($e->getFile()),
             'line'    => $e->getLine(),
         ];
@@ -450,7 +451,7 @@ class RuntimeErrorRecorder
         while ($prev !== null && count($chain) < 3) {
             $chain[] = [
                 'class'   => get_class($prev),
-                'message' => $this->maskSecrets($this->maskSensitiveSql($prev->getMessage())),
+                'message' => $this->masker->maskSecrets($this->masker->maskSensitiveSql($prev->getMessage())),
                 'file'    => $this->relPath($prev->getFile()),
                 'line'    => $prev->getLine(),
             ];
@@ -502,7 +503,7 @@ class RuntimeErrorRecorder
 
         return [
             'method' => $request->getMethod(),
-            'url'    => $this->maskUrl($request->fullUrl()),
+            'url'    => $this->masker->maskUrl($request->fullUrl()),
         ];
     }
 
@@ -510,7 +511,7 @@ class RuntimeErrorRecorder
     private function leanTrace(Throwable $e): array
     {
         return [
-            'full'       => $this->maskSecrets(substr($e->getTraceAsString(), 0, 4096)),
+            'full'       => $this->masker->maskSecrets(substr($e->getTraceAsString(), 0, 4096)),
             'app_frames' => [],
         ];
     }
@@ -560,7 +561,7 @@ class RuntimeErrorRecorder
 
         return [
             'method'    => $request->getMethod(),
-            'url'       => $this->maskUrl($request->fullUrl()),
+            'url'       => $this->masker->maskUrl($request->fullUrl()),
             'ip'        => $request->ip(),
             'user_id'   => $user?->getKey() !== null ? (string) $user->getKey() : null,
             'user_name' => $this->extractUserName($user),
@@ -583,7 +584,7 @@ class RuntimeErrorRecorder
     {
         // 先脱敏再截断：trace 里的函数参数可能含 JWT / 裸密钥；先 mask 避免被截断切断导致漏 mask。
         // maskSensitiveSql + maskSecrets 双层，与 extractException 的 message 脱敏强度对齐（原先只做后者）。
-        $full     = $this->maskSecrets($this->maskSensitiveSql($e->getTraceAsString()));
+        $full     = $this->masker->maskSecrets($this->masker->maskSensitiveSql($e->getTraceAsString()));
         $maxBytes = (int) ($this->config['trace_max_bytes'] ?? 65536);
         if (strlen($full) > $maxBytes) {
             $full = substr($full, 0, $maxBytes) . "\n... (truncated)";
@@ -684,7 +685,7 @@ class RuntimeErrorRecorder
                     break;
                 }
                 $kStr = (string) $k;
-                if ($this->shouldMaskKey($kStr)) {
+                if ($this->masker->shouldMaskKey($kStr)) {
                     $out[$kStr] = '***';
 
                     continue;
@@ -695,7 +696,7 @@ class RuntimeErrorRecorder
             return $out;
         }
         if (is_string($value)) {
-            $value = $this->maskSecrets($value);
+            $value = $this->masker->maskSecrets($value);
             $cap   = (int) ($this->config['string_truncate'] ?? 200);
             // 多字节安全 + 非负长度：原先用字节级 substr，中文/emoji 截在 UTF-8 字符中间会产出非法串，
             // 被 symfony/yaml 整段 !!binary base64 化（不可读）；cap<20 时 cap-20 为负还会反向放大。

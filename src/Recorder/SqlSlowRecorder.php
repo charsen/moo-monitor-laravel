@@ -7,7 +7,6 @@ namespace Mooeen\Monitor\Recorder;
 use Illuminate\Http\Request;
 use Mooeen\Monitor\Concerns\SafelyLogs;
 use Mooeen\Monitor\Recorder\Concerns\ManagesBucketedRecords;
-use Mooeen\Monitor\Recorder\Concerns\MasksSensitiveUrl;
 use Mooeen\Monitor\Recorder\Concerns\TracksDailyCap;
 use Mooeen\Monitor\Recorder\Concerns\WritesBucketedYaml;
 use Throwable;
@@ -25,7 +24,6 @@ use Throwable;
 class SqlSlowRecorder
 {
     use ManagesBucketedRecords;
-    use MasksSensitiveUrl;
     use SafelyLogs;
     use TracksDailyCap;
     use WritesBucketedYaml;
@@ -37,11 +35,14 @@ class SqlSlowRecorder
 
     private array $config;
 
+    private SensitiveMasker $masker;
+
     public function __construct(?string $basePath = null, ?array $config = null)
     {
         $this->config   = $config ?? (array) config('moo-monitor.sql_slow', []);
         $path           = (string) ($this->config['path'] ?? 'moo-monitor/sql-slows');
         $this->basePath = $basePath ?? RuntimeErrorRecorder::resolveStoragePath($path);
+        $this->masker   = new SensitiveMasker((array) ($this->config['mask_keys'] ?? []));
     }
 
     /**
@@ -138,7 +139,7 @@ class SqlSlowRecorder
             'owner'    => is_dir($openDir) ? @fileowner($openDir) : null,
             'php_uid'  => function_exists('posix_geteuid') ? posix_geteuid() : null,
             'origin'   => $file . ':' . $line,
-            'url'      => $request !== null ? $this->maskUrl($request->fullUrl()) : null,
+            'url'      => $request !== null ? $this->masker->maskUrl($request->fullUrl()) : null,
         ]);
     }
 
@@ -207,7 +208,7 @@ class SqlSlowRecorder
         string $now
     ): array {
         // sql_last 含 binding 替换后的真实值，可能带密钥（WHERE token='…'）→ 值侧脱敏后再落盘/上云。
-        $maskedLast = $this->maskSecrets($this->maskSensitiveSql($sqlLast));
+        $maskedLast = $this->masker->maskSecrets($this->masker->maskSensitiveSql($sqlLast));
 
         return [
             'hash'          => $hash,
@@ -252,7 +253,7 @@ class SqlSlowRecorder
         string $now,
         int $overflow = 0
     ): array {
-        $maskedLast            = $this->maskSecrets($this->maskSensitiveSql($sqlLast));
+        $maskedLast            = $this->masker->maskSecrets($this->masker->maskSensitiveSql($sqlLast));
         $existing['last_seen'] = $now;
         // count += 1 本次 + overflow 前日冻结期累积的真实发生次数（P2-1，overflow 通常为 0）
         $existing['count']             = (int) ($existing['count'] ?? 0) + 1 + max(0, $overflow);
@@ -318,7 +319,7 @@ class SqlSlowRecorder
 
         return [
             'method'    => $request->getMethod(),
-            'url'       => $this->maskUrl($request->fullUrl()),
+            'url'       => $this->masker->maskUrl($request->fullUrl()),
             'ip'        => $request->ip(),
             'user_id'   => $user?->getKey() !== null ? (string) $user->getKey() : null,
             'user_name' => $this->extractUserName($user),
