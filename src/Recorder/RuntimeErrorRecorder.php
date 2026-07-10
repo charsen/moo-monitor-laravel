@@ -18,7 +18,7 @@ use Throwable;
  * 同 hash（class + file + line + normalized message）累加 count、刷新 last_seen，不创建新文件。
  * resolved → 再触发 → 自动 reopen + count+1。
  *
- * 三桶管理 / 聚合 / 文件 IO 在 ManagesBucketedRecords trait（与 SqlSlowRecorder 共用）；
+ * 三桶管理 / 聚合 / 文件 IO / 聚合落盘骨架在抽象基类 BucketedYamlRecorder（与 SqlSlowRecorder 共用）；
  * 这里只留 runtime 特有的 record / build / refresh / makeHash / extract* + deriveRow。
  *
  * 每日写盘上限（daily_cap，默认 10）：同一 hash 当天复发达到上限后，record() 直接返回 hash
