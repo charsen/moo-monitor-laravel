@@ -51,11 +51,11 @@ return [
         // false 时退回宿主在 bootstrap/app.php 手动接入（两者并存不会双计）。
         'auto_hook' => true,
 
-        // 捕获 Log::error(..., ['exception' => $e]) 这类“只写日志、未进入 reportable”的异常。
+        // 捕获 Log::error(..., ['exception' => $e]) 这类「只写日志、未进入 reportable」的异常。
         // 队列 failed 回调 / 业务兜底 catch 常会这样记录异常；不开这条会只留 laravel.log，云端 runtimes 看不到。
         'log_context_hook' => (bool) env('MOO_MONITOR_EXCEPTION_LOG_CONTEXT_HOOK', true),
 
-        // 捕获 Log::error($e) / Log::error('失败: '.$e->getMessage()) 这类“字符串化异常进日志”：
+        // 捕获 Log::error($e) / Log::error('失败: '.$e->getMessage()) 这类「字符串化异常进日志」：
         // Logger::formatMessage 在事件之前把 Throwable 强转 string，context 无 exception 对象，
         // log_context 钩子全漏。开启后按调用点合成一条记录进同一管道（source=log_message）。
         'log_message_hook' => (bool) env('MOO_MONITOR_EXCEPTION_LOG_MESSAGE_HOOK', true),
@@ -64,7 +64,7 @@ return [
         'log_context_levels' => ['error', 'critical', 'alert', 'emergency'],
 
         // 捕获 abort(500/502/503) 与第三方包抛的 HttpException 5xx：这类在框架 internalDontReport 里，
-        // reportable 主链看不见（“服务对外已在冒烟”的高价值信号）。挂 renderable 观察者补采，只读、放行默认渲染，不改宿主响应。
+        // reportable 主链看不见（「服务对外已在冒烟」的高价值信号）。挂 renderable 观察者补采，只读、放行默认渲染，不改宿主响应。
         'http_5xx_hook' => (bool) env('MOO_MONITOR_EXCEPTION_HTTP_5XX_HOOK', true),
 
         // 捕获 Laravel 队列 JobFailed 事件，补齐 failed_jobs / failed 回调里未显式 report($e) 的失败。
