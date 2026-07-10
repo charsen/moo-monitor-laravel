@@ -93,7 +93,7 @@ class NeverThrowsIntoHostTest extends TestCase
         // 让 record() 直接抛(模拟容器/落盘在异常上报时刻处于异常态):dispatch 必须静默吞掉。
         $this->app->instance(RuntimeErrorRecorder::class, new class(null, ['enabled' => true]) extends RuntimeErrorRecorder
         {
-            public function record(\Throwable $e, ?Request $request = null): ?string
+            public function record(\Throwable $e, ?Request $request = null, string $source = 'reportable', array $meta = []): ?string
             {
                 throw new RuntimeException('recorder exploded');
             }
