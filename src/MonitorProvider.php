@@ -14,6 +14,7 @@ use Mooeen\Monitor\Command\MigrateCommand;
 use Mooeen\Monitor\Recorder\RuntimeErrorRecorder;
 use Mooeen\Monitor\Recorder\SqlSlowListener;
 use Mooeen\Monitor\Recorder\SqlSlowRecorder;
+use Symfony\Component\HttpKernel\Exception\HttpException;
 use Throwable;
 
 /**
@@ -62,6 +63,24 @@ class MonitorProvider extends ServiceProvider
                 if (method_exists($handler, 'reportable')) {
                     $handler->reportable(function (Throwable $e): void {
                         $this->app->make(ExceptionDispatcher::class)->dispatch($e, source: 'reportable');
+                    });
+                }
+            });
+        }
+
+        // HttpException 5xx（矩阵 #5）：abort(500/502/503) 与第三方包抛的 5xx 全在框架 internalDontReport
+        // 名单里，reportable 主链不可见（shouldntReport 挡在回调之前）。这里挂 renderable 观察者补采 ——
+        // renderable 不受异常自带 report() 短路影响，返回 null 即放行框架默认渲染，宿主对外响应分毫不变
+        // （vendor Handler::renderViaCallbacks:712-724）。独立开关，不随 auto_hook（与旁路钩子开关口径一致）。
+        if ((bool) config('moo-monitor.exception.http_5xx_hook', true)) {
+            $this->callAfterResolving(ExceptionHandler::class, function ($handler): void {
+                if (method_exists($handler, 'renderable')) {
+                    $handler->renderable(function (HttpException $e, $request) {
+                        if ($e->getStatusCode() >= 500) {
+                            $this->app->make(ExceptionDispatcher::class)->dispatch($e, source: 'http_5xx');
+                        }
+
+                        return null; // 关键：返回 null 放行后续渲染，绝不改变宿主对外响应
                     });
                 }
             });

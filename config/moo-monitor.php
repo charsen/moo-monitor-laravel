@@ -55,6 +55,10 @@ return [
         // 触发上述两个日志钩子的日志级别白名单。默认只兜 error 及以上；想兜 warning 级的宿主自行加。
         'log_context_levels' => ['error', 'critical', 'alert', 'emergency'],
 
+        // 捕获 abort(500/502/503) 与第三方包抛的 HttpException 5xx：这类在框架 internalDontReport 里，
+        // reportable 主链看不见（“服务对外已在冒烟”的高价值信号）。挂 renderable 观察者补采，只读、放行默认渲染，不改宿主响应。
+        'http_5xx_hook' => (bool) env('MOO_MONITOR_EXCEPTION_HTTP_5XX_HOOK', true),
+
         // 捕获 Laravel 队列 JobFailed 事件，补齐 failed_jobs / failed 回调里未显式 report($e) 的失败。
         'queue_failed_hook' => (bool) env('MOO_MONITOR_EXCEPTION_QUEUE_FAILED_HOOK', true),
 
