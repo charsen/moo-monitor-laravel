@@ -2,6 +2,7 @@
 
 namespace Mooeen\Monitor\Recorder;
 
+use Illuminate\Http\Request;
 use Mooeen\Monitor\Concerns\SafelyLogs;
 use Symfony\Component\Yaml\Yaml;
 use Throwable;
@@ -33,6 +34,9 @@ abstract class BucketedYamlRecorder
     protected string $basePath;
 
     protected array $config;
+
+    /** 脱敏器（子类构造时按各自 config['mask_keys'] 注入）。base 的 extractRequest 也用它脱 url。 */
+    protected SensitiveMasker $masker;
 
     /**
      * 单条 yaml → list/count/prune 用的派生 row（字段各类型不同）。桶名为 status 唯一真源。
@@ -532,12 +536,77 @@ abstract class BucketedYamlRecorder
      * CLI 语境的异常 / 慢查询误标成 GET http://…（extractRequest 的 CLI 分支几乎不可达）。故
      * runningInConsole 时返回 null，走真正的 CLI 分支；HTTP 语境才解析真实 request。显式传入优先（调用方 ??=）。
      */
-    protected function resolveRequest(): ?\Illuminate\Http\Request
+    protected function resolveRequest(): ?Request
     {
         if (function_exists('app') && app()->runningInConsole()) {
             return null;
         }
 
         return function_exists('request') ? request() : null;
+    }
+
+    /**
+     * 采集 request 信息（method / url(脱敏) / ip / user_id / user_name，$withGuard 时附 guard）。
+     * runtime 记录带 guard、慢 SQL 不带 —— 唯一差异用 $withGuard 参数收口，两条链路共用本方法（P4-3）。
+     *
+     * @return array<string,mixed>
+     */
+    protected function extractRequest(?Request $request, bool $withGuard): array
+    {
+        if ($request === null) {
+            $cli = ['method' => 'CLI', 'url' => null, 'ip' => null, 'user_id' => null, 'user_name' => null];
+            if ($withGuard) {
+                $cli['guard'] = null;
+            }
+
+            return $cli;
+        }
+
+        [$user, $guard] = $this->resolveAuthUser();
+        $out            = [
+            'method'    => $request->getMethod(),
+            'url'       => $this->masker->maskUrl($request->fullUrl()),
+            'ip'        => $request->ip(),
+            'user_id'   => $user?->getKey() !== null ? (string) $user->getKey() : null,
+            'user_name' => $this->extractUserName($user),
+        ];
+        if ($withGuard) {
+            $out['guard'] = $guard;
+        }
+
+        return $out;
+    }
+
+    /**
+     * 依次尝试 auth_guards（默认 admin/user/web，可配，P2-5），命中第一个有登录用户的即用。
+     *
+     * @return array{0:mixed,1:?string} [user, guard]
+     */
+    private function resolveAuthUser(): array
+    {
+        $user  = null;
+        $guard = null;
+        try {
+            $auth = function_exists('auth') ? auth() : null;
+            if ($auth) {
+                foreach ((array) ($this->config['auth_guards'] ?? ['admin', 'user', 'web']) as $g) {
+                    $g = (string) $g;
+                    try {
+                        $u = $auth->guard($g)->user();
+                        if ($u !== null) {
+                            $user  = $u;
+                            $guard = $g;
+                            break;
+                        }
+                    } catch (Throwable) {
+                        // skip
+                    }
+                }
+            }
+        } catch (Throwable) {
+            // ignore
+        }
+
+        return [$user, $guard];
     }
 }

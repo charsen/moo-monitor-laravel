@@ -22,8 +22,6 @@ class SqlSlowRecorder extends BucketedYamlRecorder
     /** open 数缓存 key */
     public const CACHE_OPEN_COUNT = 'moo-monitor:sql_slow:open_count';
 
-    private SensitiveMasker $masker;
-
     public function __construct(?string $basePath = null, ?array $config = null)
     {
         $this->config   = $config ?? (array) config('moo-monitor.sql_slow', []);
@@ -194,7 +192,7 @@ class SqlSlowRecorder extends BucketedYamlRecorder
             ],
             'daily'   => ['date' => $this->today($now), 'count' => 1],
             'context' => $this->extractContext(),
-            'request' => $this->extractRequest($request),
+            'request' => $this->extractRequest($request, false),
         ];
     }
 
@@ -224,7 +222,7 @@ class SqlSlowRecorder extends BucketedYamlRecorder
             'connection' => $connection,
         ];
         $existing['context'] = $this->extractContext();
-        $existing['request'] = $this->extractRequest($request);
+        $existing['request'] = $this->extractRequest($request, false);
         $existing['daily']   = $this->bumpDaily($existing['daily'] ?? null, $now);
 
         return $existing;
@@ -236,49 +234,6 @@ class SqlSlowRecorder extends BucketedYamlRecorder
             'env'         => function_exists('config') ? (string) config('app.env', 'unknown') : 'unknown',
             'project'     => function_exists('config') ? (string) config('app.name', 'unknown') : 'unknown',
             'occurred_at' => $this->nowIso(),
-        ];
-    }
-
-    private function extractRequest(?Request $request): array
-    {
-        if ($request === null) {
-            return [
-                'method'    => 'CLI',
-                'url'       => null,
-                'ip'        => null,
-                'user_id'   => null,
-                'user_name' => null,
-            ];
-        }
-
-        $user = null;
-        try {
-            $auth = function_exists('auth') ? auth() : null;
-            if ($auth) {
-                // guard 列表可配（P2-5）：默认 admin/user/web；宿主用 api/sanctum/自定义 guard 时配 auth_guards。
-                foreach ((array) ($this->config['auth_guards'] ?? ['admin', 'user', 'web']) as $g) {
-                    try {
-                        $u = $auth->guard((string) $g)->user();
-                        if ($u !== null) {
-                            $user = $u;
-
-                            break;
-                        }
-                    } catch (Throwable) {
-                        // skip
-                    }
-                }
-            }
-        } catch (Throwable) {
-            // ignore
-        }
-
-        return [
-            'method'    => $request->getMethod(),
-            'url'       => $this->masker->maskUrl($request->fullUrl()),
-            'ip'        => $request->ip(),
-            'user_id'   => $user?->getKey() !== null ? (string) $user->getKey() : null,
-            'user_name' => $this->extractUserName($user),
         ];
     }
 
