@@ -2,6 +2,68 @@
 
 `moo-monitor-laravel` 版本变更记录，按 [Keep a Changelog](https://keepachangelog.com/) + [SemVer](https://semver.org/) 风格。
 
+## [0.1.10] — 2026-07-09
+
+一次以「捕获精准度」为主线的大版本：先审计出真实 Laravel 宿主里能绕过监控的采集盲区（每条都在框架源码里核对过），补齐五条漏报路径与若干失真点，再把采集存储层从互相引用的 trait 收口为单一抽象基类。云端 intake 契约向后兼容（仅新增可选字段与来源），无破坏性改动。测试 129 → 176（593 断言）。
+
+### Added
+
+- **字符串化异常进日志**：新增 `MOO_MONITOR_EXCEPTION_LOG_MESSAGE_HOOK`（默认开启）。`Log::error($e)` / `Log::error('失败：' . $e->getMessage())` 这类写法在 `MessageLogged` 事件之前已被 `Logger::formatMessage` 把 `Throwable` 强转成字符串，`context` 里没有异常对象，原 `log_context` 钩子全漏。新钩子按日志调用点合成一条记录进同一采集管道（`meta.source = log_message`），并带**防回环双闸**：本包 `safeLog` 输出的日志打 `moo_monitor_internal` 标记、见标记即跳过，叠加 `static` 重入闸，杜绝「写盘失败 → error 日志 → 又被采集」死循环。
+- **HttpException 5xx 捕获**：新增 `MOO_MONITOR_EXCEPTION_HTTP_5XX_HOOK`（默认开启）。`abort(500/502/503)` 与第三方包抛出的 5xx 都在框架 `internalDontReport` 名单里、`reportable` 主链看不见。改挂 `renderable` 观察者补采（`meta.source = http_5xx`）：只读、返回 `null` 放行框架默认渲染，宿主对外响应分毫不变。
+- **调度任务非零退出码捕获**：新增 `MOO_MONITOR_EXCEPTION_SCHEDULE_EXIT_HOOK`（默认开启）。exec 型调度任务不抛异常、只以退出码表示失败，过去完全不可见。监听 `ScheduledTaskFinished` / `ScheduledBackgroundTaskFinished`（后台任务经 `schedule:finish` 回填退出码后发后者，两个都接），退出码为非零整数时合成一条记录（`meta.source = schedule_exit`，附 `command` / `exit_code` / `runtime`）。
+- **异常链根因采集**：`exception.previous` 新增，采集包装异常的 `getPrevious()` 链（最多 3 层，逐层双层脱敏），`QueryException` 里的 `PDOException` 等根因不再丢失；聚合 hash 仍按最外层计算，聚合稳定性不变。
+- **慢 SQL 连接名**：慢 SQL 记录新增 `at.connection`（来自 `QueryExecuted::$connectionName`），多库宿主可区分慢查询来自哪个连接。
+- **危险语境降级采集（lean path）**：fatal / OOM（`FatalError`，或已用内存逼近 `memory_limit` 的 0.9）语境下，采集跳过读源码片段、payload 递归脱敏、trace 正则等重操作，避免在 shutdown 只剩 32KB 保留内存时二次耗尽把这条记录也吞掉；记 `meta.lean = true` 供云端识别。**脱敏不降级**。
+- **采集面配置化**：新增 `runtime.auth_guards`（默认 `admin` / `user` / `web`，用 `api` / `sanctum` / 自定义 guard 的宿主可采到登录用户）、`runtime.app_frame_prefixes`（默认 `app/` / `routes/`，`Modules/` / `src/` 等布局的宿主可让调用栈应用帧正确归类）、`exception.log_context_levels`（触发两个日志钩子的级别白名单，默认 `error` 及以上）。
+- **热错误计数真实性**：`daily_cap` 冻结期不再直接丢弃计数——改为 `cache` 累加溢出计数、次日首次写盘时回填进 `count`，云端拿到真实累计而非封顶值；`cache` 不可用时退回原「计数偏低」行为（best-effort，不引入热路径文件 IO）。
+- **覆盖面契约测试**：新增 `CaptureMatrixTest`，采集覆盖矩阵每条路径一条端到端断言，作为今后所有采集钩子改动的守卫。
+
+### Changed
+
+- **采集存储层收口为抽象基类**：`RuntimeErrorRecorder` / `SqlSlowRecorder` 原靠三个互相引用的 trait（`ManagesBucketedRecords` / `WritesBucketedYaml` / `TracksDailyCap`）拼装，读一个方法要跨 3～4 个文件、且靠 `$this->config` / `$this->basePath` / 常量的隐式契约维系。合并为单一抽象基类 `BucketedYamlRecorder`，把两个记录器逐字重复的 `record()` 骨架（找桶 → 复发搬桶 → 每日上限/溢出 → 满闸 → 原子写盘 → 失败诊断）提为模板方法 `persistAggregated()`；`extractRequest` / `extractContext` / 写失败诊断等收进基类单份。行为不变，既有测试断言原样通过。
+- **脱敏能力独立成类**：原 `MasksSensitiveUrl` trait（实际管 URL、SQL 值侧、`INSERT` 列、JWT/Bearer 四类脱敏，名不副实、靠 `$this->config` 隐式取键）抽为 `SensitiveMasker`（构造器注入 `mask_keys`），可脱离 Laravel 纯单测。
+- **来源优先级收口单一真源**：`meta.source` 的优先级表统一到 `RuntimeErrorRecorder::SOURCE_PRIORITY`（`ExceptionDispatcher` 复用同一语义），`refresh` 路径的 source 只升不降，不再在 `queue_failed` 与 `log_context` 之间反复升降级、反复刷盘。
+- **MCP 命令拆分**：`CloudMcpCommand`（520 行）拆为传输层 `McpLoop`（stdin 循环 + JSON-RPC 编解码）与工具层 `CloudToolset`（工具定义 + 处理器），命令类只剩装配。
+- **CloudClient 回归纯传输契约**：心跳 `meta` 组装抽到 `Cloud/HeartbeatMeta::collect()`，`CloudClient::heartbeat()` 改为接收传入 `meta`，不再自己读 config（与类 docblock 声明一致）。心跳请求体形状不变。
+- **`MonitorProvider::boot()` 拆为清单式**：`publishesConfig` / `listenSlowQueries` / `hookExceptionReporting` / `scheduleCloudPush` 四个私有方法。
+
+### Fixed
+
+- **console / 队列语境 request 误标**：`request()` 在 artisan / 队列 worker 下从容器解析出的是空 `Request` 对象而非 `null`，导致 console / 队列异常被记成 `GET http://…`（畸形 URL）而非 `CLI`。改为 console 语境显式取 `null`，正确走 CLI 分支。
+- **慢 SQL binding 未转义**：`sql_last` 拼接时字符串 binding 未转义单引号 / 反斜杠，值含 `'` 或 `\` 时引号结构损坏，且可能让值侧脱敏正则错位、导致敏感值漏脱敏。改为拼接前转义，与脱敏正则认可的转义形态一致。
+- **`tagSource` 绕过冻结**：同一异常来源升级时 `tagSource` 无条件写盘、刷新 `meta.updated_at`，使 `daily_cap` 冻结形同虚设、热错误仍每分钟被推送。补两道闸：来源集合无变化不写盘、当日已达上限不写盘。
+- **中文引号统一**：配置注释中误用的弯引号 `“”` 统一为「」，对齐 moo 文案风格。
+
+### Verified
+
+- `composer quality`（composer 校验 + Pint lint + Pest 全量）全绿：176 passed / 593 assertions。
+- 经 Orchestra Testbench 的 artisan 入口验证 `moo:cloud:test`：配置守卫（缺 token 明确拦下并打码）、心跳阶段对不可达云端优雅失败（无 fatal / 无异常泄漏）；直接驱动 `buildSelfTestRecord()` 验证重构后的记录构造管道产出形状正确、YAML 序列化与往返解析一致，`request.method` 在 CLI 语境正确为 `CLI`。真实云端往返（推送 → 云端 upsert）需在配置真实 token 的宿主项目执行。
+
+## [0.1.9] — 2026-07-01
+
+### Changed
+
+- 心跳 SDK 版本优先从 Composer 安装信息读取，`MonitorProvider::VERSION` 仅作为 fallback，降低发版忘改常量的风险。
+- 同一异常对象被多个入口捕获时，`ExceptionDispatcher` 仍防重复计数，但允许更高价值来源（如 `queue_failed`）升级已落盘记录的 `meta.source`，并保留 `meta.sources` 来源列表。
+
+## [0.1.8] — 2026-07-01
+
+### Added
+
+- **Runtime 来源标记**：`ExceptionDispatcher` / `RuntimeErrorRecorder` 新增来源与元信息参数，运行时记录会写入 `meta.source`。当前来源包括 `reportable`、`log_context`、`queue_failed`、`self_test`，供云端列表、详情与排障诊断区分“异常链 / 日志兜底 / 队列失败 / 接入自检”。
+- **队列失败捕获**：新增 `MOO_MONITOR_EXCEPTION_QUEUE_FAILED_HOOK`（默认开启），监听 Laravel `JobFailed` 事件，把队列失败直接落入 runtimes，并附带 connection、queue、job name、attempts 等排查信息。同一异常对象仍复用 `WeakMap` 去重。
+- **心跳元信息**：`moo:cloud:push` 心跳 body 新增 SDK 版本、PHP/Laravel 版本、应用名、环境、采集开关、推送开关与 schedule 状态，云端可直接判断“安装了什么版本、开关是否正确、调度是否配置”。
+
+## [0.1.7] — 2026-07-01
+
+### Added
+
+- **日志异常兜底**：新增 `MOO_MONITOR_EXCEPTION_LOG_CONTEXT_HOOK`（默认开启），捕获 `Log::error(..., ['exception' => $e])` 这类只写日志、未进入 `reportable` 的异常。队列 failed 回调 / 业务 catch 里常见的异常现在也会落入本地 runtime 缓冲，并经 `moo:cloud:push` 进入云端 runtimes；同一异常对象若已走过 `reportable`，仍复用 `ExceptionDispatcher` 的 `WeakMap` 去重，不会双计。
+
+### Verified
+
+- Laravel 8.83 / 9.52 / 10.50 / 11.54 / 12.62 临时应用均完成 path 接入、`package:discover`、`artisan list moo`、`moo:cloud:push --dry-run` smoke 验证，服务提供者和命令注册可正常加载。
+
 ## [0.1.6] — 2026-06-27
 
 继续放宽框架约束以支持 **Laravel 8** 宿主(`php ^8.0` + `laravel/framework ^8.54`),便于更老的项目经 path / VCS 接入。

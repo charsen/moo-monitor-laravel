@@ -21,6 +21,7 @@ namespace Mooeen\Monitor\Command;
 use Illuminate\Console\Command;
 use Mooeen\Monitor\Cloud\CloudClient;
 use Mooeen\Monitor\Cloud\CloudSync;
+use Mooeen\Monitor\Cloud\HeartbeatMeta;
 
 class CloudPushCommand extends Command
 {
@@ -103,7 +104,7 @@ class CloudPushCommand extends Command
         // 云端的「推送中断」哨兵据此区分「项目健康沉默」与「采集/推送真断了」。best-effort,
         // 失败不影响推送结果。
         if (! $dryRun) {
-            (new CloudClient($cfg))->heartbeat();
+            (new CloudClient($cfg))->heartbeat(HeartbeatMeta::collect());
         }
 
         $this->table(['类型', '扫描', '变更', '推送', '结果'], $rows);

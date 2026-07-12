@@ -1,7 +1,7 @@
 <?php declare(strict_types=1);
 
 use Mooeen\Monitor\Cloud\CloudClient;
-use Mooeen\Monitor\Command\CloudMcpCommand;
+use Mooeen\Monitor\Command\CloudToolset;
 
 class CloudMcpCommandFakeCloudClient extends CloudClient
 {
@@ -66,15 +66,12 @@ class CloudMcpCommandFakeCloudClient extends CloudClient
 
 function cloudMcpInvoke(string $method, array $args, CloudMcpCommandFakeCloudClient $cloud): array
 {
-    $cmd  = new CloudMcpCommand;
-    $prop = new ReflectionProperty($cmd, 'cloud');
-    $prop->setAccessible(true);
-    $prop->setValue($cmd, $cloud);
-
-    $ref = new ReflectionMethod($cmd, $method);
+    // P5：工具 handler 已从命令拆到 CloudToolset，直接在 toolset 上反射调用。
+    $toolset = new CloudToolset($cloud);
+    $ref     = new ReflectionMethod($toolset, $method);
     $ref->setAccessible(true);
 
-    return $ref->invoke($cmd, $args);
+    return $ref->invoke($toolset, $args);
 }
 
 it('get_runtime 拒绝非法 hash,不打云端', function () {

@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Mooeen\Monitor\Tests\Feature\Recorder;
 
+use Illuminate\Log\Events\MessageLogged;
+use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
 use Mockery;
@@ -33,7 +35,12 @@ class ExceptionDispatcherTest extends TestCase
 
         app(ExceptionDispatcher::class)->dispatch(new RuntimeException('boom'));
 
-        $spy->shouldHaveReceived('record')->once();
+        $spy->shouldHaveReceived('record')->once()->with(
+            Mockery::type(RuntimeException::class),
+            Mockery::any(),
+            'reportable',
+            [],
+        );
         Http::assertNothingSent();
         Mail::assertNothingSent();
     }
@@ -69,6 +76,110 @@ class ExceptionDispatcherTest extends TestCase
         $dispatcher->dispatch($e);
 
         $spy->shouldHaveReceived('record')->once();
+    }
+
+    public function test_same_exception_object_can_upgrade_to_higher_priority_source_without_recount(): void
+    {
+        config()->set('moo-monitor.runtime.enabled', true);
+
+        $spy = Mockery::spy(RuntimeErrorRecorder::class);
+        $this->app->instance(RuntimeErrorRecorder::class, $spy);
+
+        $e          = new RuntimeException('reported then queue failed');
+        $dispatcher = app(ExceptionDispatcher::class);
+        $dispatcher->dispatch($e, source: 'reportable');
+        $dispatcher->dispatch($e, source: 'queue_failed', meta: ['connection' => 'redis']);
+
+        $spy->shouldHaveReceived('record')->once();
+        $spy->shouldHaveReceived('tagSource')->once()->with(
+            $e,
+            'queue_failed',
+            Mockery::on(fn (array $meta) => ($meta['connection'] ?? null) === 'redis'),
+        );
+    }
+
+    public function test_queue_failed_event_records_runtime_with_source(): void
+    {
+        config()->set('moo-monitor.runtime.enabled', true);
+
+        $spy = Mockery::spy(RuntimeErrorRecorder::class);
+        $this->app->instance(RuntimeErrorRecorder::class, $spy);
+
+        $job = new class
+        {
+            public function getQueue(): string
+            {
+                return 'default';
+            }
+
+            public function attempts(): int
+            {
+                return 3;
+            }
+
+            public function resolveName(): string
+            {
+                return 'App\\Jobs\\FooJob';
+            }
+        };
+
+        event(new JobFailed('redis', $job, new RuntimeException('job failed event')));
+
+        $spy->shouldHaveReceived('record')->once()->with(
+            Mockery::type(RuntimeException::class),
+            Mockery::any(),
+            'queue_failed',
+            Mockery::on(fn (array $meta) => ($meta['connection'] ?? null) === 'redis'
+                && ($meta['queue'] ?? null)                               === 'default'
+                && ($meta['job_name'] ?? null)                            === 'App\\Jobs\\FooJob'
+                && ($meta['attempts'] ?? null)                            === 3),
+        );
+    }
+
+    public function test_error_log_with_exception_context_records_runtime(): void
+    {
+        config()->set('moo-monitor.runtime.enabled', true);
+
+        $spy = Mockery::spy(RuntimeErrorRecorder::class);
+        $this->app->instance(RuntimeErrorRecorder::class, $spy);
+
+        event(new MessageLogged('error', '[Job Failed] App\\Jobs\\FooJob: boom', [
+            'exception' => new RuntimeException('job failed from log context'),
+        ]));
+
+        $spy->shouldHaveReceived('record')->once()->with(
+            Mockery::type(RuntimeException::class),
+            Mockery::any(),
+            'log_context',
+            Mockery::on(fn (array $meta) => ($meta['log_level'] ?? null) === 'error'
+                && str_contains((string) ($meta['log_message'] ?? ''), 'FooJob')),
+        );
+    }
+
+    public function test_log_context_hook_reuses_dispatcher_dedupe(): void
+    {
+        config()->set('moo-monitor.runtime.enabled', true);
+
+        $spy = Mockery::spy(RuntimeErrorRecorder::class);
+        $this->app->instance(RuntimeErrorRecorder::class, $spy);
+
+        $e = new RuntimeException('reported then logged');
+        app(ExceptionDispatcher::class)->dispatch($e);
+        event(new MessageLogged('error', 'same exception later logged', ['exception' => $e]));
+
+        $spy->shouldHaveReceived('record')->once();
+    }
+
+    public function test_non_error_log_context_is_ignored(): void
+    {
+        config()->set('moo-monitor.runtime.enabled', true);
+
+        $spy = Mockery::spy(RuntimeErrorRecorder::class);
+        $this->app->instance(RuntimeErrorRecorder::class, $spy);
+
+        event(new MessageLogged('info', 'noise', ['exception' => new RuntimeException('ignored')]));
+
+        $spy->shouldNotHaveReceived('record');
     }
 
     public function test_different_exception_objects_record_separately(): void

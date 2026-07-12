@@ -30,7 +30,7 @@ it('SqlSlowRecorder masks sensitive query params in request.url', function () {
     $request = Request::create('http://localhost/api/orders?token=abc123&api_key=zzz&page=1', 'GET');
 
     try {
-        $hash = $rec->record('select * from `orders`', 'select * from `orders`', 250.0, '/app/Http/Foo.php', 20, $request);
+        $hash = $rec->record('select * from `orders`', 'select * from `orders`', 250.0, '/app/Http/Foo.php', 20, request: $request);
         expect($hash)->not->toBeNull();
 
         $files = glob($base . '/open/*.yaml');
@@ -54,7 +54,7 @@ it('SqlSlowRecorder leaves a query-less url untouched', function () {
     $request = Request::create('http://localhost/api/orders', 'GET');
 
     try {
-        $rec->record('select 1', 'select 1', 120.0, '/app/Foo.php', 5, $request);
+        $rec->record('select 1', 'select 1', 120.0, '/app/Foo.php', 5, request: $request);
         $files = glob($base . '/open/*.yaml');
         $url   = Yaml::parseFile($files[0])['request']['url'] ?? '';
         expect($url)->toBe('http://localhost/api/orders');

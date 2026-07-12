@@ -54,6 +54,7 @@ class SqlSlowListener
                 tookMs: (float) $event->time,
                 file: $frame['file'] ?? '',
                 line: (int) ($frame['line'] ?? 0),
+                connection: $event->connectionName,
             );
         } catch (Throwable $e) {
             // listener 自身不能抛 — 业务请求不能因慢 SQL 上报失败而 500。
@@ -91,7 +92,10 @@ class SqlSlowListener
             return "'" . $binding->format('Y-m-d H:i:s') . "'";
         }
         if (is_string($binding)) {
-            return "'" . $binding . "'";
+            // 转义反斜杠 + 单引号后再包引号（失真 D）：binding 里的裸 ' 会破坏 sql_last 的引号结构，
+            // 让 maskSensitiveSql 的引号串正则错位、把敏感值漏脱敏。转义形态与该正则认可的
+            // '(?:[^'\\]|\\.)*' 一致（先替 \ 再替 ' —— 后者引入的 \ 不会被再次处理）。
+            return "'" . str_replace(['\\', "'"], ['\\\\', "\\'"], $binding) . "'";
         }
         if (is_bool($binding)) {
             return $binding ? '1' : '0';
