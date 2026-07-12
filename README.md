@@ -38,6 +38,7 @@ Laravel 后端监控采集 SDK，用来把项目里的 **运行时异常** 和 *
 - `abort(500/502/503)` 与第三方包抛出的 HttpException 5xx（只读观察，不改宿主响应）；
 - 队列任务最终失败（`JobFailed`）与每次重试 attempt 抛出的异常；
 - 调度任务抛出的异常；
+- 调度任务非零退出码（exec 型任务不抛异常、仅以退出码表示失败，监听 `ScheduledTaskFinished` / `ScheduledBackgroundTaskFinished`）；
 - PHP warning / notice（框架已转 `ErrorException` 抛出，归入第一条）；
 - 慢 SQL（超过阈值的查询）。
 
@@ -219,6 +220,9 @@ php artisan moo:cloud:push
 | --- | --- | --- |
 | `MOO_MONITOR_RUNTIME_ENABLED` | `true` | 是否采集运行时异常。 |
 | `MOO_MONITOR_EXCEPTION_LOG_CONTEXT_HOOK` | `true` | 是否捕获错误日志 context 里的 `exception` 对象。 |
+| `MOO_MONITOR_EXCEPTION_LOG_MESSAGE_HOOK` | `true` | 是否捕获 `Log::error($e)` 这类「异常被字符串化、只写日志」的形态。 |
+| `MOO_MONITOR_EXCEPTION_HTTP_5XX_HOOK` | `true` | 是否补采 `abort(500/502/503)` 等 HttpException 5xx（只读观察、放行默认渲染，不改宿主响应）。 |
+| `MOO_MONITOR_EXCEPTION_SCHEDULE_EXIT_HOOK` | `true` | 是否捕获 exec 型调度任务的非零退出码。 |
 | `MOO_MONITOR_EXCEPTION_QUEUE_FAILED_HOOK` | `true` | 是否捕获 Laravel 队列失败事件。 |
 | `MOO_MONITOR_RUNTIME_MAX_OPEN` | `500` | 本地 open 异常最大数量。 |
 | `MOO_MONITOR_RUNTIME_DAILY_CAP` | `10` | 同一异常每天最多写盘次数。 |
@@ -233,6 +237,8 @@ php artisan moo:cloud:push
 | `MOO_MONITOR_CLOUD_BATCH` | `100` | 每批推送数量。 |
 | `MOO_MONITOR_CLOUD_SCHEDULE` | `true` | 与 `ENABLED` 同时为真时自动挂每分钟推送。 |
 | `MOO_MONITOR_CLOUD_LOCAL_RETENTION_DAYS` | `7` | 推送成功后本地缓冲保留天数。 |
+
+另有三项数组型配置按宿主布局微调（无 env，直接改 `config/moo-monitor.php`）：`runtime.auth_guards`（采集登录用户时依次尝试的 guard，默认 `admin` / `user` / `web`；用 `api` / `sanctum` / 自定义 guard 的宿主在此追加）、`runtime.app_frame_prefixes`（调用栈「宿主业务帧」的路径前缀，默认 `app/` / `routes/`；`Modules/` / `src/` 等布局自行追加）、`exception.log_context_levels`（触发日志钩子的级别白名单，默认 `error` 及以上）。
 
 更多配置见 `config/moo-monitor.php`，每个字段都有注释。
 

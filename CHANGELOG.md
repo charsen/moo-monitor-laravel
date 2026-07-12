@@ -2,6 +2,24 @@
 
 `moo-monitor-laravel` 版本变更记录，按 [Keep a Changelog](https://keepachangelog.com/) + [SemVer](https://semver.org/) 风格。
 
+## [0.1.11] — 2026-07-11
+
+发版前低版本兼容冒烟 + 0.1.10 遗留文档补齐。无运行时代码改动，`src/` 与 0.1.10 逐字节一致。
+
+### Added
+
+- **发版前低版本冒烟脚本**：新增 `composer smoke:lower`。Pest 套件只在 Laravel 12 上跑，版本相关的 API 兼容问题可能「测试全绿却在老宿主 fatal」；该脚本临时建一个目标版本的 Laravel app、用 path 仓库装本包，断言服务提供者能 boot、命令注册、`moo:cloud:push --dry-run` 跑通。默认最低支持版本 Laravel 8，可 `composer smoke:lower -- '^9.0'` 指定 9 / 10 / 11。
+
+### Docs
+
+- **环境要求订正**：README 更正为实际支持 PHP 8.0+ / Laravel 8.54~12（此前漏更）。
+- **补齐 0.1.10 配置文档**：README「常用配置」补上 0.1.10 新增的三个采集钩子开关（`MOO_MONITOR_EXCEPTION_LOG_MESSAGE_HOOK` / `_HTTP_5XX_HOOK` / `_SCHEDULE_EXIT_HOOK`），并列出 `runtime.auth_guards` / `runtime.app_frame_prefixes` / `exception.log_context_levels` 三个按宿主布局微调的数组项。
+- **补齐采集路径说明**：README「采集范围」补上「调度任务非零退出码」这条 0.1.10 新增路径（原文只写了「调度任务抛出的异常」）。
+
+### Style
+
+- 修复 `CloudMcpCommandTest` 的 Pint 风格告警（随 0.1.5 带入，纯格式）。
+
 ## [0.1.10] — 2026-07-09
 
 一次以「捕获精准度」为主线的大版本：先审计出真实 Laravel 宿主里能绕过监控的采集盲区（每条都在框架源码里核对过），补齐五条漏报路径与若干失真点，再把采集存储层从互相引用的 trait 收口为单一抽象基类。云端 intake 契约向后兼容（仅新增可选字段与来源），无破坏性改动。测试 129 → 176（593 断言）。
