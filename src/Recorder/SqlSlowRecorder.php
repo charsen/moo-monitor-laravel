@@ -5,11 +5,6 @@ declare(strict_types=1);
 namespace Mooeen\Monitor\Recorder;
 
 use Illuminate\Http\Request;
-use Mooeen\Monitor\Concerns\SafelyLogs;
-use Mooeen\Monitor\Recorder\Concerns\ManagesBucketedRecords;
-use Mooeen\Monitor\Recorder\Concerns\MasksSensitiveUrl;
-use Mooeen\Monitor\Recorder\Concerns\TracksDailyCap;
-use Mooeen\Monitor\Recorder\Concerns\WritesBucketedYaml;
 use Throwable;
 
 /**
@@ -18,30 +13,21 @@ use Throwable;
  * 把 listener 捕到的慢 SQL 落盘到 storage_path('moo-monitor/sql-slows/{open,resolved,deleted}/<hash>.yaml'),
  * 同 hash(normalized sql + file:line)累加 count、刷新 last_seen、保留 max_took_ms。
  *
- * 三桶管理 / 聚合 / 文件 IO 在 ManagesBucketedRecords trait（与 RuntimeErrorRecorder 共用）；
+ * 三桶管理 / 聚合 / 文件 IO / 聚合落盘骨架在抽象基类 BucketedYamlRecorder（与 RuntimeErrorRecorder 共用）；
  * 这里只留慢 SQL 特有的 record / build / refresh / makeHash / extract* + deriveRow。
  * 数据字段精简到 SQL 场景需要的部分（无 trace / payload / source_snippet）。
  */
-class SqlSlowRecorder
+class SqlSlowRecorder extends BucketedYamlRecorder
 {
-    use ManagesBucketedRecords;
-    use MasksSensitiveUrl;
-    use SafelyLogs;
-    use TracksDailyCap;
-    use WritesBucketedYaml;
-
     /** open 数缓存 key */
     public const CACHE_OPEN_COUNT = 'moo-monitor:sql_slow:open_count';
-
-    private string $basePath;
-
-    private array $config;
 
     public function __construct(?string $basePath = null, ?array $config = null)
     {
         $this->config   = $config ?? (array) config('moo-monitor.sql_slow', []);
         $path           = (string) ($this->config['path'] ?? 'moo-monitor/sql-slows');
         $this->basePath = $basePath ?? RuntimeErrorRecorder::resolveStoragePath($path);
+        $this->masker   = new SensitiveMasker((array) ($this->config['mask_keys'] ?? []));
     }
 
     /**
@@ -59,6 +45,7 @@ class SqlSlowRecorder
         float $tookMs,
         string $file,
         int $line,
+        ?string $connection = null,
         ?Request $request = null
     ): ?string {
         if (! ($this->config['enabled'] ?? false)) {
@@ -66,45 +53,16 @@ class SqlSlowRecorder
         }
 
         try {
-            $request ??= function_exists('request') ? request() : null;
+            $request ??= $this->resolveRequest();
             $hash = $this->makeHash($sqlRaw, $file, $line);
-            // 用记录实际所在桶判定（桶目录是 status 真源），而非 yaml 内 status 字段。
-            $bucket   = $this->findBucket($hash);
-            $existing = $bucket !== null ? $this->readFile($hash, $bucket) : null;
-            $now      = $this->nowIso();
-            $isNew    = false;
 
-            if ($existing && $bucket !== 'open') {
-                // resolved / deleted 桶里的同 hash 复发 → 搬回 open 复活（之前 deleted 漏处理会留跨桶重复）。
-                $this->moveFile($hash, $bucket, 'open');
-                $existing['status']        = 'open';
-                $existing['resolved_at']   = null;
-                $existing['resolved_by']   = null;
-                $existing['resolved_note'] = null;
-                $data                      = $this->refresh($existing, $sqlLast, $tookMs, $file, $line, $request, $now);
-            } elseif ($existing) {
-                // 当天已达写盘上限 → 直接返回，不写盘（冻结 yaml：不刷 last_seen/不 +count/不刷 meta.updated_at）。
-                // 热慢查询冻结后 mtime 不变 → 不再每分钟被 moo:cloud:push 反复推。跟 RuntimeErrorRecorder 对齐。
-                if ($this->dailyCapReached($existing, $now)) {
-                    return $hash;
-                }
-                $data = $this->refresh($existing, $sqlLast, $tookMs, $file, $line, $request, $now);
-            } else {
-                if ($this->openBucketFull()) {
-                    return null;
-                }
-                $data  = $this->build($hash, $sqlRaw, $sqlLast, $tookMs, $file, $line, $request, $now);
-                $isNew = true;
-            }
-
-            $this->ensureDir();
-            if (! $this->writeFile($hash, 'open', $data, $isNew)) {
-                $this->logWriteFailure($file, $line, $request);
-
-                return null;
-            }
-
-            return $hash;
+            // 聚合落盘骨架与 RuntimeErrorRecorder 共用基类 persistAggregated（桶目录是 status 真源）。
+            return $this->persistAggregated(
+                $hash,
+                fn (string $now)                                 => $this->build($hash, $sqlRaw, $sqlLast, $tookMs, $file, $line, $connection, $request, $now),
+                fn (array $existing, string $now, int $overflow) => $this->refresh($existing, $sqlLast, $tookMs, $file, $line, $connection, $request, $now, $overflow),
+                fn ()                                            => $this->logWriteFailure($file, $line, $request),
+            );
         } catch (Throwable $self) {
             // safeLog：日志写入本身也可能抛（database/slack 通道后端不可用），否则会逃出 record()
             // → 经 SqlSlowListener 冒泡进宿主查询执行。record() 对调用方只返回 string|null，永不抛。
@@ -135,7 +93,7 @@ class SqlSlowRecorder
             'owner'    => is_dir($openDir) ? @fileowner($openDir) : null,
             'php_uid'  => function_exists('posix_geteuid') ? posix_geteuid() : null,
             'origin'   => $file . ':' . $line,
-            'url'      => $request !== null ? $this->maskUrl($request->fullUrl()) : null,
+            'url'      => $request !== null ? $this->masker->maskUrl($request->fullUrl()) : null,
         ]);
     }
 
@@ -156,7 +114,7 @@ class SqlSlowRecorder
         $line         = 0;
         $tookMs       = (float) max(1, (int) ($this->config['threshold_ms'] ?? 100));
         $hash         = $this->makeHash($sqlRaw, $file, $line);
-        $data         = $this->build($hash, $sqlRaw, $sqlLast, $tookMs, $file, $line, null, $now);
+        $data         = $this->build($hash, $sqlRaw, $sqlLast, $tookMs, $file, $line, null, null, $now);
         $data['meta'] = ['updated_at' => $now];
 
         return $data;
@@ -199,11 +157,12 @@ class SqlSlowRecorder
         float $tookMs,
         string $file,
         int $line,
+        ?string $connection,
         ?Request $request,
         string $now
     ): array {
         // sql_last 含 binding 替换后的真实值，可能带密钥（WHERE token='…'）→ 值侧脱敏后再落盘/上云。
-        $maskedLast = $this->maskSecrets($this->maskSensitiveSql($sqlLast));
+        $maskedLast = $this->masker->maskSecrets($this->masker->maskSensitiveSql($sqlLast));
 
         return [
             'hash'          => $hash,
@@ -227,12 +186,13 @@ class SqlSlowRecorder
                 'threshold_ms' => (int) ($this->config['threshold_ms'] ?? 100),
             ],
             'at' => [
-                'file' => $this->relPath($file),
-                'line' => $line,
+                'file'       => $this->relPath($file),
+                'line'       => $line,
+                'connection' => $connection,
             ],
             'daily'   => ['date' => $this->today($now), 'count' => 1],
             'context' => $this->extractContext(),
-            'request' => $this->extractRequest($request),
+            'request' => $this->extractRequest($request, false),
         ];
     }
 
@@ -242,23 +202,27 @@ class SqlSlowRecorder
         float $tookMs,
         string $file,
         int $line,
+        ?string $connection,
         ?Request $request,
-        string $now
+        string $now,
+        int $overflow = 0
     ): array {
-        $maskedLast                    = $this->maskSecrets($this->maskSensitiveSql($sqlLast));
-        $existing['last_seen']         = $now;
-        $existing['count']             = (int) ($existing['count'] ?? 0) + 1;
+        $maskedLast            = $this->masker->maskSecrets($this->masker->maskSensitiveSql($sqlLast));
+        $existing['last_seen'] = $now;
+        // count += 1 本次 + overflow 前日冻结期累积的真实发生次数（P2-1，overflow 通常为 0）
+        $existing['count']             = (int) ($existing['count'] ?? 0) + 1 + max(0, $overflow);
         $existing['sql']['last']       = $this->truncate($maskedLast, 4096);
         $existing['sql']['last_bytes'] = $this->strLen($maskedLast);
         $existing['took']['last_ms']   = round($tookMs, 2);
         $prevMax                       = (float) ($existing['took']['max_ms'] ?? 0);
         $existing['took']['max_ms']    = max($prevMax, round($tookMs, 2));
         $existing['at']                = [
-            'file' => $this->relPath($file),
-            'line' => $line,
+            'file'       => $this->relPath($file),
+            'line'       => $line,
+            'connection' => $connection,
         ];
         $existing['context'] = $this->extractContext();
-        $existing['request'] = $this->extractRequest($request);
+        $existing['request'] = $this->extractRequest($request, false);
         $existing['daily']   = $this->bumpDaily($existing['daily'] ?? null, $now);
 
         return $existing;
@@ -273,52 +237,10 @@ class SqlSlowRecorder
         ];
     }
 
-    private function extractRequest(?Request $request): array
-    {
-        if ($request === null) {
-            return [
-                'method'    => 'CLI',
-                'url'       => null,
-                'ip'        => null,
-                'user_id'   => null,
-                'user_name' => null,
-            ];
-        }
-
-        $user = null;
-        try {
-            $auth = function_exists('auth') ? auth() : null;
-            if ($auth) {
-                foreach (['admin', 'user', 'web'] as $g) {
-                    try {
-                        $u = $auth->guard($g)->user();
-                        if ($u !== null) {
-                            $user = $u;
-
-                            break;
-                        }
-                    } catch (Throwable) {
-                        // skip
-                    }
-                }
-            }
-        } catch (Throwable) {
-            // ignore
-        }
-
-        return [
-            'method'    => $request->getMethod(),
-            'url'       => $this->maskUrl($request->fullUrl()),
-            'ip'        => $request->ip(),
-            'user_id'   => $user?->getKey() !== null ? (string) $user->getKey() : null,
-            'user_name' => $this->extractUserName($user),
-        ];
-    }
-
     /**
      * 桶名是 status 唯一真源 — 跟 runtime recorder 同设计。
      */
-    private function deriveRow(string $bucket, array $data): array
+    protected function deriveRow(string $bucket, array $data): array
     {
         return [
             'status'         => $bucket,
@@ -333,6 +255,7 @@ class SqlSlowRecorder
             'threshold_ms' => $data['took']['threshold_ms'] ?? 0,
             'file'         => $data['at']['file']           ?? '',
             'line'         => $data['at']['line']           ?? 0,
+            'connection'   => $data['at']['connection']     ?? null,
             'url'          => $data['request']['url']       ?? null,
             'method'       => $data['request']['method']    ?? null,
         ];

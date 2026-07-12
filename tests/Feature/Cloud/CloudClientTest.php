@@ -7,6 +7,7 @@ namespace Mooeen\Monitor\Tests\Feature\Cloud;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Mooeen\Monitor\Cloud\CloudClient;
+use Mooeen\Monitor\Cloud\HeartbeatMeta;
 use Mooeen\Monitor\Tests\TestCase;
 
 /**
@@ -223,6 +224,36 @@ class CloudClientTest extends TestCase
         Http::assertSent(function ($req) {
             return str_starts_with((string) $req->url(), 'https://cloud.test/api/v1/heartbeat')
                 && str_contains($req->body(), '"token"');
+        });
+    }
+
+    public function test_heartbeat_sends_runtime_metadata(): void
+    {
+        $this->configureCloud();
+        config([
+            'app.name'                        => 'HostApp',
+            'app.env'                         => 'production',
+            'moo-monitor.cloud.enabled'       => true,
+            'moo-monitor.runtime.enabled'     => true,
+            'moo-monitor.sql_slow.enabled'    => false,
+            'moo-monitor.cloud.push.runtimes' => true,
+            'moo-monitor.cloud.push.slow_sql' => false,
+            'moo-monitor.cloud.schedule'      => true,
+        ]);
+        Http::fake(['cloud.test/api/v1/heartbeat' => Http::response(['ok' => true], 200)]);
+
+        // P2-6：meta 由调用方用 HeartbeatMeta::collect() 组装后传入；CloudClient 只负责原样发送。
+        $this->assertTrue((new CloudClient)->heartbeat(HeartbeatMeta::collect()));
+
+        Http::assertSent(function ($req) {
+            $meta = $req->data()['meta'] ?? [];
+
+            return ($meta['sdk'] ?? null) === 'moo-monitor-laravel'
+                && ($meta['sdk_version'] ?? null) !== null
+                && ($meta['app_name'] ?? null)        === 'HostApp'
+                && ($meta['app_env'] ?? null)         === 'production'
+                && ($meta['runtime_enabled'] ?? null) === true
+                && ($meta['push_slow_sql'] ?? null)   === false;
         });
     }
 

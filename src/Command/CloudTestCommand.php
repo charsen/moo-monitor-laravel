@@ -22,6 +22,7 @@ namespace Mooeen\Monitor\Command;
 
 use Illuminate\Console\Command;
 use Mooeen\Monitor\Cloud\CloudClient;
+use Mooeen\Monitor\Cloud\HeartbeatMeta;
 use Mooeen\Monitor\Recorder\RuntimeErrorRecorder;
 use Mooeen\Monitor\Recorder\SqlSlowRecorder;
 use Throwable;
@@ -73,7 +74,7 @@ class CloudTestCommand extends Command
         // ② 心跳：连通 + 鉴权（零数据污染的前置探测）
         $this->newLine();
         $this->line('② 连通与鉴权（心跳）');
-        if (! $client->heartbeat()) {
+        if (! $client->heartbeat(HeartbeatMeta::collect())) {
             $this->error('   ✗ 心跳失败 —— 无法连通云端，或 token 无效。');
             $this->line('     排查：① 云端地址是否可达；② token 是否正确且具备 runtimes 能力；');
             $this->line('     ③ 内网自签证书可设 MOO_MONITOR_CLOUD_VERIFY=false。');
