@@ -2,6 +2,31 @@
 
 `moo-monitor-laravel` 版本变更记录，按 [Keep a Changelog](https://keepachangelog.com/) + [SemVer](https://semver.org/) 风格。
 
+## [0.1.12] — 2026-07-22
+
+加固 Cloud 增量确认、MCP 读写契约与跨 Laravel 版本的调度失败采集，解决单条失败拖累整批、历史记录重复上报和监控命令自反馈问题。
+
+### Fixed
+
+- **逐条 Cloud 回执**：严格消费 `saved / filtered / skipped / results` 闭合契约；已保存或过滤的记录立即确认，临时失败只重试自身，不可重试记录移入对应类型的 `cloud-rejected/`，已确认的 resolved 文件可单独回收。
+- **确认水位与并发安全**：清理本地文件已不存在时的陈旧 ack；同类型同步以非阻塞文件锁覆盖扫描、HTTP、逐条确认和状态写入，避免手动、调度或页面入口并发覆盖水位。
+- **保留 open 累计锚点**：`local_retention_days` 不再删除 stale open YAML，避免同 hash 从低 count 重建后令云端累计数和复发信号冻结；仅回收已确认的 resolved 快照。
+- **MCP 分页**：Runtime/Todo list 新增 `offset`，严格校验 Cloud 返回的 `offset / has_more / next_offset`；翻页提示要求保持相同 `status / limit`，旧 Cloud 在后续页缺少分页回执时 fail-closed，避免无限重复第一页。
+- **MCP 协议与参数防御**：补齐 JSON-RPC 2.0 请求、notification、id、params 和协议版本校验；列表、hash、todo id、布尔值及状态参数拒绝畸形类型，避免 warning、误过滤或敏感 payload 意外带出。
+- **调度失败去重与防回环**：兼容 Laravel 8 的 Finished-only 与 Laravel 12 的 Finished → Failed → report 事件序列，同一任务只采集一次；`moo:cloud:*` 自身非零退出不再写回 runtime 缓冲，真实命令异常仍保留。
+
+### Changed
+
+- MCP Runtime/Todo 读写改用独立 `mcp` ability；Host 的 `runtimes / slow_queries` 只负责上报，Chrome 的 `todos` 只负责待办 intake。
+- Todo MCP category 与云端统一为 `bug / frontend_bug / backend_bug / task` 四类。
+- Laravel 8 下限冒烟增加调度事件序列与真实不可达 Cloud 重试路径，防止只在新框架测试通过。
+
+### Verified
+
+- `composer quality`：203 passed / 717 assertions。
+- `composer smoke:lower`：Laravel Framework 8.83.29 安装、provider boot、命令注册、调度失败采集及真实 HTTP 重试路径通过。
+- 与 moo-scaffold、moo-scaffold-cloud 的 partial ack、分页和权限契约组合回归通过。
+
 ## [0.1.11] — 2026-07-11
 
 发版前低版本兼容冒烟 + 0.1.10 遗留文档补齐。无运行时代码改动，`src/` 与 0.1.10 逐字节一致。

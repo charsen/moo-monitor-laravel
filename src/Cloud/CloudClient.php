@@ -266,9 +266,9 @@ class CloudClient
      *
      * @return array{ok:bool,status:int,data:?array<string,mixed>,error:?string}
      */
-    public function fetchRuntimes(int $limit = 20, ?string $status = null): array
+    public function fetchRuntimes(int $limit = 20, ?string $status = null, int $offset = 0): array
     {
-        $body = ['limit' => $limit];
+        $body = ['limit' => $limit, 'offset' => $offset];
         if ($status !== null) {
             $body['status'] = $status;
         }
@@ -305,9 +305,9 @@ class CloudClient
      *
      * @return array{ok:bool,status:int,data:?array<string,mixed>,error:?string}
      */
-    public function fetchTodos(int $limit = 20, ?string $status = null): array
+    public function fetchTodos(int $limit = 20, ?string $status = null, int $offset = 0): array
     {
-        $body = ['limit' => $limit];
+        $body = ['limit' => $limit, 'offset' => $offset];
         if ($status !== null) {
             $body['status'] = $status;
         }

@@ -38,7 +38,7 @@ Laravel 后端监控采集 SDK，用来把项目里的 **运行时异常** 和 *
 - `abort(500/502/503)` 与第三方包抛出的 HttpException 5xx（只读观察，不改宿主响应）；
 - 队列任务最终失败（`JobFailed`）与每次重试 attempt 抛出的异常；
 - 调度任务抛出的异常；
-- 调度任务非零退出码（exec 型任务不抛异常、仅以退出码表示失败，监听 `ScheduledTaskFinished` / `ScheduledBackgroundTaskFinished`）；
+- 调度任务非零退出码（exec 型任务不抛异常、仅以退出码表示失败，监听 `ScheduledTaskFinished` / `ScheduledBackgroundTaskFinished`；Laravel 12 随后合成的普通异常会按同一 task 去重）；
 - PHP warning / notice（框架已转 `ErrorException` 抛出，归入第一条）；
 - 慢 SQL（超过阈值的查询）。
 
@@ -104,7 +104,7 @@ MOO_MONITOR_CLOUD_TOKEN=moo_xxxxxxxx
 # MOO_MONITOR_CLOUD_URL=https://c.mooeen.com
 ```
 
-Token 在 moo-scaffold-cloud 的「接入 Token」页面生成，建议开启 `runtimes` 和 `slow_queries` 能力。
+Token 在 moo-scaffold-cloud 的「接入 Token」页面生成：推送需要 `runtimes` 和 `slow_queries` 能力；若还要运行 `moo:cloud:mcp`，同一枚私密 Host Token 还需开启 `mcp` 能力。`mcp` 不能与 Chrome 扩展的 `todos`、浏览器端 `frontend_errors` 或 CI 的 `sourcemaps` 混用。
 
 运行时异常默认开启：
 
@@ -174,11 +174,13 @@ php artisan moo:cloud:push
 
 `moo:cloud:push` 失败时会打印待重试记录的 hash（自动调度的后台运行则写入日志），据此定位：
 
+> `moo:cloud:*` 是监控链路自身命令，其调度非零退出不会写回 runtime 缓冲，避免 Cloud 故障形成自反馈；推送中断由 Cloud heartbeat 哨兵检测。
+
 ```text
 storage/moo-monitor/<runtimes|sql-slows>/<open|resolved>/<hash>.yaml
 ```
 
-云端明确判定为不可重试的记录会自动移入 `storage/moo-monitor/cloud-rejected/` 留证，并不再阻塞游标。该目录中的 YAML 可用于排查字段或契约问题；确认无需保留后再手动清理即可。
+云端明确判定为不可重试的记录会自动移入对应类型目录下的 `cloud-rejected/` 留证，例如 `storage/moo-monitor/runtimes/cloud-rejected/`、`storage/moo-monitor/sql-slows/cloud-rejected/`，并不再阻塞游标。该目录中的 YAML 可用于排查字段或契约问题；确认无需保留后再手动清理即可。
 
 ## 自动推送
 
@@ -251,12 +253,13 @@ storage/moo-monitor/
 ├── runtimes/
 │   ├── open/
 │   ├── resolved/
-│   └── deleted/
+│   ├── deleted/
+│   └── cloud-rejected/
 ├── sql-slows/
 │   ├── open/
 │   ├── resolved/
-│   └── deleted/
-├── cloud-rejected/
+│   ├── deleted/
+│   └── cloud-rejected/
 ├── cloud-sync.json
 └── cloud-sync.json.acks
 ```
@@ -273,9 +276,11 @@ MCP 用于让 AI 工具直接读取云端 runtime 错误和待办，适合“拉
 claude mcp add moo-cloud -- php artisan moo:cloud:mcp
 ```
 
-MCP 复用 `.env` 中的 `MOO_MONITOR_CLOUD_URL` 和 `MOO_MONITOR_CLOUD_TOKEN`，不需要额外 token。
+MCP 复用 `.env` 中的 `MOO_MONITOR_CLOUD_URL` 和 `MOO_MONITOR_CLOUD_TOKEN`，不需要额外 token，但该 Token 必须包含 `mcp` 能力。只有 `runtimes` / `slow_queries` 上报能力的 Token 无权读取或处置云端问题。
 
-待办分两类：`bug`（Chrome 扩展采集的缺陷）和 `task`（云端管理界面手动新建的任务）。`list_open_todos` / `get_todo` 返回的「类型」字段会标明，便于 AI 区分「修缺陷」和「做任务」。
+`list_open_runtimes` 和 `list_open_todos` 每次最多返回 50 条。响应提示 `has_more=true` 时，下一次调用保持相同的 `status` 与 `limit`，并把提示中的 `next_offset` 作为 `offset` 传入；直到提示“已到末页”。若后续页调用遇到旧 Cloud 未返回分页元数据，工具会直接报错，避免重复读取第一页。
+
+待办分四类：`bug`（待分类缺陷）、`frontend_bug`（前端缺陷）、`backend_bug`（后端缺陷）和 `task`（普通任务）。`list_open_todos` / `get_todo` 返回的「类型」字段会标明，便于 AI 选择正确代码范围并区分「修缺陷」和「做任务」。
 
 ## 从 moo-scaffold <= 3.8 迁移
 

@@ -112,6 +112,29 @@ it('游标增量:第二次无新增 → 不再推送', function () {
     Http::assertSentCount(1); // 仅第一次发了请求
 });
 
+it('同类型已有同步在执行时明确跳过，不发送请求也不改状态', function () {
+    Http::fake(['*' => Http::response(['ok' => true, 'saved' => 1, 'filtered' => 0, 'skipped' => 0])]);
+    cloudSync_seedRuntime();
+
+    $lock = fopen($this->cursor . '.runtimes.sync.lock', 'c');
+    expect($lock)->not->toBeFalse();
+    flock($lock, LOCK_EX);
+
+    try {
+        $r = (new CloudSync($this->cursor))->sync('runtimes');
+    } finally {
+        flock($lock, LOCK_UN);
+        fclose($lock);
+    }
+
+    expect($r['skipped'])->toBeTrue()
+        ->and($r['reason'])->toContain('同类型推送正在执行')
+        ->and($r['pushed'])->toBe(0)
+        ->and(is_file($this->cursor))->toBeFalse()
+        ->and(is_file($this->cursor . '.acks'))->toBeFalse();
+    Http::assertNothingSent();
+});
+
 it('过滤记录也算已确认：推进游标且下一轮不重发', function () {
     cloudSync_seedRuntime('saved runtime');
     cloudSync_seedRuntime('filtered runtime');
@@ -197,6 +220,41 @@ it('逐条回执：只重试 retryable skipped，已 saved/filtered 的记录不
     $done = $sync->sync('runtimes');
     expect($done['changed'])->toBe(0);
     Http::assertSentCount(2);
+});
+
+it('partial ack 对应的本地文件已不存在时，清理磁盘中的陈旧确认状态', function () {
+    $hashes = [];
+    Http::fake(function ($request) use (&$hashes) {
+        $records = $request['records'];
+        $hashes  = array_column($records, 'hash');
+
+        return Http::response([
+            'ok'       => true,
+            'saved'    => 1,
+            'filtered' => 0,
+            'skipped'  => 1,
+            'results'  => [
+                ['index' => 0, 'hash' => $records[0]['hash'], 'status' => 'saved', 'retryable' => false, 'reason' => null],
+                ['index' => 1, 'hash' => $records[1]['hash'], 'status' => 'skipped', 'retryable' => true, 'reason' => 'upsert_failed'],
+            ],
+        ]);
+    });
+
+    cloudSync_seedRuntime('ack stale saved');
+    cloudSync_seedRuntime('ack stale retry');
+    $sync = new CloudSync($this->cursor);
+
+    expect($sync->sync('runtimes')['ok'])->toBeFalse();
+    foreach ($hashes as $hash) {
+        @unlink(storage_path('moo-monitor/runtimes/open/' . $hash . '.yaml'));
+    }
+
+    $second = $sync->sync('runtimes');
+    $state  = json_decode((string) file_get_contents($this->cursor . '.acks'), true);
+
+    expect($second['changed'])->toBe(0)
+        ->and($state)->not->toHaveKey('runtimes');
+    Http::assertSentCount(1);
 });
 
 it('永久 skipped 单文件移入 cloud-rejected，不影响同批成功项和游标', function () {
@@ -489,14 +547,14 @@ it('pruneLocal:retention=0 → 完全不回收(一个字节都不动)', function
         ->and(is_file($base . '/resolved/bbbbbbbbbbbb.yaml'))->toBeTrue();
 });
 
-it('pruneLocal:retention>0 清 stale open、保留近期 open', function () {
+it('pruneLocal:retention>0 也保留 stale open 累计锚点', function () {
     cloudSync_writeRecord('open', 'aaaaaaaaaaaa', now()->subDays(30)->toIso8601String()); // 旧
     cloudSync_writeRecord('open', 'dddddddddddd', now()->toIso8601String());              // 新
 
     $res  = (new CloudSync($this->cursor))->pruneLocal('runtimes', 7);
     $base = storage_path('moo-monitor/runtimes');
 
-    expect($res['prunedOpen'])->toBe(1)
-        ->and(is_file($base . '/open/aaaaaaaaaaaa.yaml'))->toBeFalse() // dormant 清
+    expect($res['prunedOpen'])->toBe(0)
+        ->and(is_file($base . '/open/aaaaaaaaaaaa.yaml'))->toBeTrue()  // 累计 count 锚点不能删
         ->and(is_file($base . '/open/dddddddddddd.yaml'))->toBeTrue(); // 近期留
 });

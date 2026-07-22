@@ -256,7 +256,7 @@ class CloudClientTest extends TestCase
             ], 200),
         ]);
 
-        $r = (new CloudClient)->fetchRuntimes(7, 'open');
+        $r = (new CloudClient)->fetchRuntimes(7, 'open', 12);
 
         $this->assertTrue($r['ok']);
         $this->assertSame('abc123abc123', $r['data']['runtimes'][0]['hash']);
@@ -265,7 +265,8 @@ class CloudClientTest extends TestCase
             return str_starts_with((string) $req->url(), 'https://cloud.test/api/v1/runtimes/list')
                 && str_contains($req->body(), '"token"')
                 && ($req->data()['limit'] ?? null)  === 7
-                && ($req->data()['status'] ?? null) === 'open';
+                && ($req->data()['status'] ?? null) === 'open'
+                && ($req->data()['offset'] ?? null) === 12;
         });
     }
 
@@ -411,7 +412,7 @@ class CloudClientTest extends TestCase
             ], 200),
         ]);
 
-        $r = (new CloudClient)->fetchTodos(7, 'open');
+        $r = (new CloudClient)->fetchTodos(7, 'open', 12);
 
         $this->assertTrue($r['ok']);
         $this->assertSame('页面崩了', $r['data']['todos'][0]['title']);
@@ -420,7 +421,8 @@ class CloudClientTest extends TestCase
             return str_starts_with((string) $req->url(), 'https://cloud.test/api/v1/todos/list')
                 && str_contains($req->body(), '"token"')
                 && ($req->data()['limit'] ?? null)  === 7
-                && ($req->data()['status'] ?? null) === 'open';
+                && ($req->data()['status'] ?? null) === 'open'
+                && ($req->data()['offset'] ?? null) === 12;
         });
     }
 

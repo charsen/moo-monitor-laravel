@@ -71,7 +71,8 @@ return [
         'queue_failed_hook' => (bool) env('MOO_MONITOR_EXCEPTION_QUEUE_FAILED_HOOK', true),
 
         // 捕获 exec 型调度任务的非零退出码（不抛异常、只以退出码表示失败，过去完全不可见）。
-        // 监听 ScheduledTaskFinished / ScheduledBackgroundTaskFinished，退出码非 0 时合成一条 schedule_exit 记录。
+        // 监听 ScheduledTaskFinished / ScheduledBackgroundTaskFinished，退出码非 0 时合成一条 schedule_exit 记录；
+        // Laravel 12 后续合成的普通异常按同一 task 去重，moo:cloud:* 调度非零退出不回写 runtime 缓冲。
         'schedule_exit_hook' => (bool) env('MOO_MONITOR_EXCEPTION_SCHEDULE_EXIT_HOOK', true),
 
         // php -r / tinker 里的实验异常跳过
@@ -120,7 +121,7 @@ return [
         // 云端基址（私有部署时改这里）
         'base_url' => rtrim((string) env('MOO_MONITOR_CLOUD_URL', 'https://c.mooeen.com'), '/'),
 
-        // 项目接入 token（云端「接入 Token」页生成，须带 runtimes / slow_queries 能力）
+        // 项目接入 token（推送须带 runtimes / slow_queries；使用 moo:cloud:mcp 还须带 mcp）
         'token' => (string) env('MOO_MONITOR_CLOUD_TOKEN', ''),
 
         // HTTP 超时（秒）
@@ -140,7 +141,7 @@ return [
         // enabled + schedule 同时为真时自动挂每分钟调度（需宿主跑 schedule:run）
         'schedule' => (bool) env('MOO_MONITOR_CLOUD_SCHEDULE', true),
 
-        // 推送成功后本地回收阈值（天）：resolved 全清，open 清 last_seen 超过 N 天的；<=0 完全不回收
+        // 推送成功后本地回收开关/阈值（天）：>0 回收已确认 resolved；open 是累计 count 锚点，永不按时间删除；<=0 完全不回收
         'local_retention_days' => (int) env('MOO_MONITOR_CLOUD_LOCAL_RETENTION_DAYS', 7),
     ],
 
