@@ -19,7 +19,7 @@
  *   claude mcp add moo-cloud -- php artisan moo:cloud:mcp
  * 之后 AI 即有六个工具：runtime 三件套（list_open_runtimes / get_runtime / resolve_runtime）
  * + 待办三件套（list_open_todos / get_todo / update_todo_status）。
- * 凭据复用 moo-monitor.cloud 已配置的 base_url + token（提报 token 必带 runtimes 能力）。
+ * 凭据复用 moo-monitor.cloud 已配置的 base_url + token（私密 Host token 必带独立 mcp 能力）。
  */
 
 namespace Mooeen\Monitor\Command;

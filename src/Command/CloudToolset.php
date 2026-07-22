@@ -21,13 +21,13 @@ class CloudToolset
     {
         return implode("\n", [
             '本 server 暴露当前项目在 moo-scaffold-cloud 汇聚的 runtime 运行时错误。工作流：',
-            '1. list_open_runtimes 挑要修的异常（默认 open + in_progress;status 可过滤）。hash 是后续操作的唯一键。',
+            '1. list_open_runtimes 挑要修的异常（默认 open + in_progress；status 可过滤；has_more=true 时按 next_offset 翻页）。hash 是后续操作的唯一键。',
             '2. get_runtime <hash> 拿完整上下文（exc_file:line + 源码片段 + 调用栈）；改 bug 前必看，别凭 list 的摘要猜根因。',
             '3. 改代码并本地验证（跑回归 / 复现路径）通过后，才用 resolve_runtime <hash> 回写「已解决」闭环；未确认修复不要 resolve。',
             '注意：部署窗口瞬态（文件 Failed to open）、切包旧队列（incomplete class）、跨 schema 表缺失等多为环境噪音而非代码 bug——核实后可直接 resolve 并在 note 注明研判，不必改码。',
             '',
-            '另暴露团队「待办」（category=bug 是测试/产品经 Chrome 扩展提报的缺陷，带页面 URL / 失败请求 / JS 错误上下文；category=task 是云端手动新建的普通任务）。工作流：',
-            '1. list_open_todos 挑要处理的待办（默认 open + in_progress）；id 是后续操作的唯一键。',
+            '另暴露团队「待办」：category=bug 是待分类缺陷，frontend_bug / backend_bug 是已归类的前端 / 后端缺陷，task 是普通任务；缺陷通常带页面 URL / 失败请求 / JS 错误上下文。工作流：',
+            '1. list_open_todos 挑要处理的待办（默认 open + in_progress；has_more=true 时按 next_offset 翻页）；id 是后续操作的唯一键。',
             '2. get_todo <id> 拿完整上下文（描述 + 失败请求 + JS 错误 + 时间线）；动手前先 update_todo_status <id> in_progress 认领，避免与他人重复处理。',
             '3. 修完并验证后 update_todo_status <id> done(note 写改了什么)闭环；未确认完成不要标 done。',
         ]);
@@ -45,6 +45,7 @@ class CloudToolset
                     'properties' => [
                         'limit'  => ['type' => 'integer', 'description' => '返回条数，1–50，默认 20', 'minimum' => 1, 'maximum' => 50],
                         'status' => ['type' => 'string', 'description' => '可选状态过滤', 'enum' => ['open', 'in_progress', 'resolved']],
+                        'offset' => ['type' => 'integer', 'description' => '分页偏移量，默认 0；下一页使用上次返回的 next_offset', 'minimum' => 0],
                     ],
                 ],
                 'annotations' => [
@@ -92,12 +93,13 @@ class CloudToolset
             ],
             [
                 'name'        => 'list_open_todos',
-                'description' => '列出本项目在云端「可处理」的待办（Chrome 扩展提报的缺陷 + 云端手动新建的任务，默认 open + in_progress，最新优先）。返回每条的 id、标题、类型 category（bug 缺陷 / task 任务）、优先级、状态、页面 URL。',
+                'description' => '列出本项目在云端「可处理」的待办（默认 open + in_progress，最新优先）。返回每条的 id、标题、类型 category（bug 待分类缺陷 / frontend_bug 前端缺陷 / backend_bug 后端缺陷 / task 任务）、优先级、状态、页面 URL。',
                 'inputSchema' => [
                     'type'       => 'object',
                     'properties' => [
                         'limit'  => ['type' => 'integer', 'description' => '返回条数，1–50，默认 20', 'minimum' => 1, 'maximum' => 50],
                         'status' => ['type' => 'string', 'description' => '可选状态过滤', 'enum' => ['open', 'in_progress', 'done']],
+                        'offset' => ['type' => 'integer', 'description' => '分页偏移量，默认 0；下一页使用上次返回的 next_offset', 'minimum' => 0],
                     ],
                 ],
                 'annotations' => [
@@ -163,17 +165,32 @@ class CloudToolset
     private function callListRuntimes(array $args): array
     {
         // 与 inputSchema 对齐钳进 [1,50]；模型偶尔无视 schema 传 0 / 超大值，挡在本地少打一次云端。
-        $limit  = isset($args['limit']) ? max(1, min(50, (int) $args['limit'])) : 20;
-        $status = isset($args['status']) ? (string) $args['status'] : null;
+        if (array_key_exists('limit', $args) && ! is_int($args['limit'])) {
+            return $this->toolError('limit 必须是整数。');
+        }
+        if (array_key_exists('status', $args) && ! is_string($args['status'])) {
+            return $this->toolError('status 必须是字符串。');
+        }
+        if (array_key_exists('offset', $args) && ! is_int($args['offset'])) {
+            return $this->toolError('offset 必须是整数。');
+        }
+        $limit  = isset($args['limit']) ? max(1, min(50, $args['limit'])) : 20;
+        $status = $args['status'] ?? null;
+        $offset = isset($args['offset']) ? max(0, $args['offset']) : 0;
         // 非法 status 别透传：云端白名单不命中会静默回退成 open+in_progress,
         // AI 误以为过滤生效（2026-06-11 修）
         if ($status !== null && ! in_array($status, ['open', 'in_progress', 'resolved'], true)) {
             return $this->toolError("status「{$status}」非法，仅支持 open / in_progress / resolved。");
         }
 
-        $r = $this->cloud->fetchRuntimes($limit, $status);
+        $r = $this->cloud->fetchRuntimes($limit, $status, $offset);
         if (! $r['ok']) {
             return $this->toolError('拉取失败：' . $r['error']);
+        }
+
+        $page = $this->pagination($r['data'] ?? [], $offset);
+        if ($page['error'] !== null) {
+            return $this->toolError('分页失败：' . $page['error']);
         }
 
         $rows = $r['data']['runtimes'] ?? [];
@@ -183,15 +200,17 @@ class CloudToolset
             return $this->toolText("云端没有{$scope} runtime 错误。");
         }
 
-        // 提示返回条数 + 是否触顶，让 AI 判断要不要收窄 status 或还有更多未取（云端无分页游标）。
-        $hint = count($rows) >= $limit ? "（已达上限 {$limit} 条，可能还有更多；可用 status 收窄）" : '';
+        $hint = $this->paginationHint($page, count($rows), $limit, $status);
 
         return $this->toolText('共 ' . count($rows) . " 条{$hint}:\n" . $this->jsonText($rows));
     }
 
     private function callGetRuntime(array $args): array
     {
-        $hash = trim((string) ($args['hash'] ?? ''));
+        if (array_key_exists('hash', $args) && ! is_string($args['hash'])) {
+            return $this->toolError('hash 必须是字符串。');
+        }
+        $hash = trim($args['hash'] ?? '');
         if ($hash === '') {
             return $this->toolError('缺少 hash。');
         }
@@ -201,6 +220,9 @@ class CloudToolset
 
         // 模型常把 boolean 送成字符串（"false"/"no"），(bool) 强转会变 true → 敏感 payload
         // 意外带出；filter_var 按语义解析，解析不了的怪值按 false 安全侧处理（2026-06-11 修）
+        if (array_key_exists('with_payload', $args) && ! is_bool($args['with_payload']) && ! is_string($args['with_payload'])) {
+            return $this->toolError('with_payload 必须是布尔值。');
+        }
         $withPayload = filter_var($args['with_payload'] ?? false, FILTER_VALIDATE_BOOL, FILTER_NULL_ON_FAILURE) ?? false;
         $r           = $this->cloud->fetchRuntime($hash, $withPayload);
         if (! $r['ok']) {
@@ -223,7 +245,15 @@ class CloudToolset
 
     private function callResolveRuntime(array $args): array
     {
-        $hash = trim((string) ($args['hash'] ?? ''));
+        if (array_key_exists('hash', $args) && ! is_string($args['hash'])) {
+            return $this->toolError('hash 必须是字符串。');
+        }
+        foreach (['note', 'resolved_by'] as $key) {
+            if (array_key_exists($key, $args) && $args[$key] !== null && ! is_string($args[$key])) {
+                return $this->toolError("{$key} 必须是字符串。");
+            }
+        }
+        $hash = trim($args['hash'] ?? '');
         if ($hash === '') {
             return $this->toolError('缺少 hash。');
         }
@@ -233,8 +263,8 @@ class CloudToolset
 
         $r = $this->cloud->resolveRuntime(
             $hash,
-            isset($args['note']) ? (string) $args['note'] : null,
-            isset($args['resolved_by']) ? (string) $args['resolved_by'] : null,
+            $args['note']        ?? null,
+            $args['resolved_by'] ?? null,
         );
         if (! $r['ok']) {
             return $this->toolError('回写失败：' . $r['error']);
@@ -252,16 +282,31 @@ class CloudToolset
 
     private function callListTodos(array $args): array
     {
-        $limit  = isset($args['limit']) ? max(1, min(50, (int) $args['limit'])) : 20;
-        $status = isset($args['status']) ? (string) $args['status'] : null;
+        if (array_key_exists('limit', $args) && ! is_int($args['limit'])) {
+            return $this->toolError('limit 必须是整数。');
+        }
+        if (array_key_exists('status', $args) && ! is_string($args['status'])) {
+            return $this->toolError('status 必须是字符串。');
+        }
+        if (array_key_exists('offset', $args) && ! is_int($args['offset'])) {
+            return $this->toolError('offset 必须是整数。');
+        }
+        $limit  = isset($args['limit']) ? max(1, min(50, $args['limit'])) : 20;
+        $status = $args['status'] ?? null;
+        $offset = isset($args['offset']) ? max(0, $args['offset']) : 0;
         // 同 list_open_runtimes：非法 status 本地拦下，不让云端静默回退误导
         if ($status !== null && ! in_array($status, ['open', 'in_progress', 'done'], true)) {
             return $this->toolError("status「{$status}」非法，仅支持 open / in_progress / done。");
         }
 
-        $r = $this->cloud->fetchTodos($limit, $status);
+        $r = $this->cloud->fetchTodos($limit, $status, $offset);
         if (! $r['ok']) {
             return $this->toolError('拉取失败：' . $r['error']);
+        }
+
+        $page = $this->pagination($r['data'] ?? [], $offset);
+        if ($page['error'] !== null) {
+            return $this->toolError('分页失败：' . $page['error']);
         }
 
         $rows = $r['data']['todos'] ?? [];
@@ -271,16 +316,22 @@ class CloudToolset
             return $this->toolText("云端没有{$scope}待办。");
         }
 
-        $hint = count($rows) >= $limit ? "（已达上限 {$limit} 条，可能还有更多；可用 status 收窄）" : '';
+        $hint = $this->paginationHint($page, count($rows), $limit, $status);
 
         return $this->toolText('共 ' . count($rows) . " 条{$hint}:\n" . $this->jsonText($rows));
     }
 
     private function callGetTodo(array $args): array
     {
-        $id = trim((string) ($args['id'] ?? ''));
+        if (array_key_exists('id', $args) && ! is_string($args['id'])) {
+            return $this->toolError('id 必须是字符串。');
+        }
+        $id = trim($args['id'] ?? '');
         if ($id === '') {
             return $this->toolError('缺少 id。');
+        }
+        if (! $this->isTodoId($id)) {
+            return $this->toolError('id 格式非法，必须是 20–32 位字母或数字。');
         }
 
         $r = $this->cloud->fetchTodo($id);
@@ -296,13 +347,15 @@ class CloudToolset
         // markdown 是 toAiMarkdown 产出的「可直接喂 AI」文本；时间线/截图数附在其后供参考。
         $text     = (string) ($todo['markdown'] ?? $this->jsonText($todo));
         $category = (string) ($todo['category'] ?? '');
-        // category 是云端 2026-06-22 新增字段（enum bug|task，缺省 bug）；markdown 标题已含分类，
+        // category 是云端分类字段；markdown 标题已含分类，
         // 这里在元信息块也显式列出，与 状态/优先级 对齐。未知/缺失值原样透传，不臆断为 Bug。
         $kind = match ($category) {
-            'task'  => '任务',
-            'bug'   => 'Bug（缺陷）',
-            ''      => '—',
-            default => $category,
+            'task'         => '任务',
+            'bug'          => 'Bug（待分类）',
+            'frontend_bug' => '前端 Bug（缺陷）',
+            'backend_bug'  => '后端 Bug（缺陷）',
+            ''             => '—',
+            default        => $category,
         };
         $extra = [
             '类型'      => $kind,
@@ -320,10 +373,18 @@ class CloudToolset
 
     private function callUpdateTodoStatus(array $args): array
     {
-        $id     = trim((string) ($args['id'] ?? ''));
-        $status = trim((string) ($args['status'] ?? ''));
+        foreach (['id', 'status', 'note', 'by'] as $key) {
+            if (array_key_exists($key, $args) && $args[$key] !== null && ! is_string($args[$key])) {
+                return $this->toolError("{$key} 必须是字符串。");
+            }
+        }
+        $id     = trim($args['id'] ?? '');
+        $status = trim($args['status'] ?? '');
         if ($id === '') {
             return $this->toolError('缺少 id。');
+        }
+        if (! $this->isTodoId($id)) {
+            return $this->toolError('id 格式非法，必须是 20–32 位字母或数字。');
         }
         if (! in_array($status, ['in_progress', 'done'], true)) {
             return $this->toolError('status 仅支持 in_progress / done。');
@@ -332,8 +393,8 @@ class CloudToolset
         $r = $this->cloud->updateTodoStatus(
             $id,
             $status,
-            isset($args['note']) ? (string) $args['note'] : null,
-            isset($args['by']) ? (string) $args['by'] : null,
+            $args['note'] ?? null,
+            $args['by']   ?? null,
         );
         if (! $r['ok']) {
             return $this->toolError('回写失败：' . $r['error']);
@@ -364,6 +425,93 @@ class CloudToolset
         return ['content' => [['type' => 'text', 'text' => $text]], 'isError' => true];
     }
 
+    /**
+     * 严格读取 Cloud 的 offset 回执。后续页没有回执时 fail-closed，避免旧 Cloud 忽略 offset
+     * 后让 AI 永久重复第一页；第一页仍兼容尚未返回分页字段的旧 Cloud。
+     *
+     * @param array<string,mixed> $data
+     *
+     * @return array{supported:bool,offset:int,has_more:bool,next_offset:?int,error:?string}
+     */
+    private function pagination(array $data, int $requestedOffset): array
+    {
+        $keys        = ['offset', 'has_more', 'next_offset'];
+        $hasAnyField = false;
+        foreach ($keys as $key) {
+            if (array_key_exists($key, $data)) {
+                $hasAnyField = true;
+                break;
+            }
+        }
+
+        if (! $hasAnyField) {
+            return [
+                'supported'   => false,
+                'offset'      => $requestedOffset,
+                'has_more'    => false,
+                'next_offset' => null,
+                'error'       => $requestedOffset > 0 ? 'Cloud 未返回 offset / has_more / next_offset，可能仍是旧版本且忽略了 offset；请先升级 Cloud。' : null,
+            ];
+        }
+        foreach ($keys as $key) {
+            if (! array_key_exists($key, $data)) {
+                return [
+                    'supported'   => true,
+                    'offset'      => $requestedOffset,
+                    'has_more'    => false,
+                    'next_offset' => null,
+                    'error'       => 'Cloud 返回的 offset / has_more / next_offset 分页字段不完整。',
+                ];
+            }
+        }
+
+        $offset     = $data['offset']      ?? null;
+        $hasMore    = $data['has_more']    ?? null;
+        $nextOffset = $data['next_offset'] ?? null;
+        if (! is_int($offset) || $offset !== $requestedOffset || ! is_bool($hasMore)) {
+            return [
+                'supported'   => true,
+                'offset'      => $requestedOffset,
+                'has_more'    => false,
+                'next_offset' => null,
+                'error'       => 'Cloud 返回的 offset / has_more 与请求不一致。',
+            ];
+        }
+        if (($hasMore && (! is_int($nextOffset) || $nextOffset <= $offset))
+            || (! $hasMore && $nextOffset !== null)) {
+            return [
+                'supported'   => true,
+                'offset'      => $offset,
+                'has_more'    => $hasMore,
+                'next_offset' => null,
+                'error'       => 'Cloud 返回的 next_offset 非法。',
+            ];
+        }
+
+        return [
+            'supported'   => true,
+            'offset'      => $offset,
+            'has_more'    => $hasMore,
+            'next_offset' => $nextOffset,
+            'error'       => null,
+        ];
+    }
+
+    /** @param array{supported:bool,offset:int,has_more:bool,next_offset:?int,error:?string} $page */
+    private function paginationHint(array $page, int $count, int $limit, ?string $status): string
+    {
+        if (! $page['supported']) {
+            return $count >= $limit ? "（has_more=unknown；已达上限 {$limit} 条，可能还有更多；当前 Cloud 未提供分页元数据）" : '';
+        }
+        if (! $page['has_more']) {
+            return "（offset {$page['offset']}，has_more=false，已到末页）";
+        }
+
+        $statusHint = $status !== null ? "、status={$status}" : '、保持当前 status 为空';
+
+        return "（offset {$page['offset']}，has_more=true；下一页保持 limit={$limit}{$statusHint}，传 offset={$page['next_offset']}）";
+    }
+
     private function jsonText(mixed $v): string
     {
         return (string) json_encode($v, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
@@ -372,5 +520,10 @@ class CloudToolset
     private function isRuntimeHash(string $hash): bool
     {
         return preg_match('/^[a-f0-9]{12}$/', $hash) === 1;
+    }
+
+    private function isTodoId(string $id): bool
+    {
+        return preg_match('/^[0-9a-zA-Z]{20,32}$/', $id) === 1;
     }
 }

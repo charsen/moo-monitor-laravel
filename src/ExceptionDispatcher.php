@@ -32,9 +32,23 @@ class ExceptionDispatcher
      */
     private WeakMap $dispatched;
 
+    /**
+     * 框架已被更精确入口覆盖、后续 reportable / log_context 不应再重复采集的异常对象。
+     * 当前用于 Laravel 12 的调度非零退出：Finished 已合成 ScheduledTaskExit 后，框架又会
+     * 合成一个普通 Exception 并 report；两者描述同一次失败，只保留前者。
+     */
+    private WeakMap $suppressed;
+
     public function __construct()
     {
         $this->dispatched = new WeakMap;
+        $this->suppressed = new WeakMap;
+    }
+
+    /** 标记一个已由更精确入口处理的异常对象，后续所有采集入口均忽略。 */
+    public function suppress(Throwable $e): void
+    {
+        $this->suppressed[$e] = true;
     }
 
     /**
@@ -42,6 +56,10 @@ class ExceptionDispatcher
      */
     public function dispatch(Throwable $e, ?Request $request = null, string $source = 'reportable', array $meta = []): void
     {
+        if (isset($this->suppressed[$e])) {
+            return;
+        }
+
         // 防双计的 WeakMap 标记放在 try 之前：它必须先生效（否则抛错-重试会双计），isset/赋值本身不抛。
         // 首见即标记；重复且来源优先级更高才更新 source（tagSource 升级路径）。
         $repeat  = isset($this->dispatched[$e]);

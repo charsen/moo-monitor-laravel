@@ -11,7 +11,7 @@
 - Logger::formatMessage 在 fireLogEvent 之前把 Throwable 强转 string —— Log::error($e) 到 MessageLogged 时已无异常对象。
 - 异常自带 report() 方法且不返回 false 时，Handler::reportThrowable 直接短路，reportable 回调不执行。
 - fatal/OOM 走 HandleExceptions::handleShutdown → report，但保留内存仅 32KB —— 重采集路径（读源码 + 64KB trace 正则 + Yaml::dump）会二次 OOM。
-- 调度任务抛异常走 ScheduledTaskFailed + report，不再发 Finished；非零退出码只体现在 ScheduledTaskFinished / ScheduledBackgroundTaskFinished 的 task->exitCode 上（后台任务经 schedule:finish 回填后发后者，两个事件都要接）。
+- Laravel 8 调度前台命令非零退出只发 ScheduledTaskFinished；Laravel 12 顺序是 Finished → 框架合成普通 Exception → ScheduledTaskFailed → report，同一次失败必须按 task 关联去重；真实任务抛异常没有先发 Finished。后台任务仍经 schedule:finish 发 ScheduledBackgroundTaskFinished。
 - request() 在 console/队列语境下从容器解析出**空 Request 对象而非 null** —— extractRequest 的 CLI 分支几乎不可达（方案 P2-3：先写测试证实再修）。
 
 ## 本仓约束与做法（确认过的）
@@ -24,9 +24,16 @@
 - 云端 intake 契约只增字段、不改既有字段语义（云端按 (project, hash) upsert）。
 - Cloud intake 以逐条 `results` 回执确认：`saved` / `filtered` 立即记账且不重发，retryable `skipped` 只重试自身，non-retryable `skipped` 移入 `cloud-rejected`；聚合计数必须与逐条结果闭合，旧 Cloud 仅在 `skipped=0` 且聚合计数闭合时兼容无 `results` 响应。
 - Cloud/Monitor 的逐条回执 consumer-driven contract fixture 镜像在两仓 `tests/Fixtures/cloud-intake-partial-response.json`；Cloud 必须生成该形状，Monitor 必须能严格解析同一形状。
-- 版本号沿 0.1.x 小步发布（当前 0.1.9），不跳 0.2.0 —— 2026-07-09 用户拍板，别按 semver 惯例自作主张升 minor。
+- 版本号沿 0.1.x 小步发布（当前 0.1.12），不跳 0.2.0 —— 2026-07-09 用户拍板，别按 semver 惯例自作主张升 minor。
 - 采集钩子开关口径（2026-07-09 确认）：旁路钩子（log_context / queue_failed / log_message / http_5xx / schedule_exit）独立开关、默认开；reportable 主链由 auto_hook 总控；调度异常走主链不设独立开关，过滤下沉 host 的 dontReport。
 - 中文文案全角标点 +「」引号；开源仓（CHANGELOG/注释/文档）不出现私有宿主项目名，只描述技术触发场景。
+- 宿主日志时间可能使用 `Asia/Shanghai`，而开发机文件时间是 PDT；排查定时任务加载异常时先统一时区。2026-07-22 的 `CloudSync::readAckState()` undefined 发生于源码编辑中间态（日志 14:39 CST = 文件本地 23:39 PDT，最终文件 23:42 保存），当前类反射可见该方法且宿主 `moo:cloud:push --dry-run` 退出码为 0，不是提交后的代码缺口。
+- MCP Todo category 契约是四类：`bug`（待分类）、`frontend_bug`、`backend_bug`、`task`；instructions、tool description、`get_todo` 元信息和 README 必须同步，不能继续按旧 `bug|task` 二分类描述。
+- partial ack 只保留仍存在于本地 open / resolved 桶的 hash；本地文件被人工清理后也要回写空 ack，不能让 `.acks` 永久残留失效水位。
+- MCP stdio 只有通过 `jsonrpc=2.0`、非空字符串 method、结构化 params 校验的无 id 对象才是 notification；顶层非对象、非法 id、畸形 `protocolVersion` 必须分别返回 `-32600` / `-32602`，不能静默丢弃或触发字符串转换 warning。
+- Cloud Token 的 MCP 读写面使用独立 `mcp` ability；`runtimes` / `slow_queries` 只授权上报，Chrome 扩展的 `todos` 只授权待办 intake，三者不能互相替代。
+- MCP Runtime/Todo 列表以 `offset` 分页，Cloud 返回 `offset / has_more / next_offset`；翻页必须保持相同 `status / limit`。后续页缺少分页回执时 Monitor fail-closed，防止旧 Cloud 忽略 offset 后无限重复第一页。
+- 本包调度的 `moo:cloud:*` 非零退出不得写入 runtime 缓冲；推送中断由 Cloud heartbeat 哨兵负责，否则会形成「push 失败 → 采集 push 失败 → 待推数据增加」自反馈。命令内部真正抛出的 Error / RuntimeException 仍须采集，不能隐藏代码根因。
 
 ## 用户偏好
 

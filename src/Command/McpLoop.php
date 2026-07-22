@@ -21,7 +21,21 @@ class McpLoop
      */
     private const SUPPORTED_PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 
-    public function __construct(private CloudToolset $toolset) {}
+    /** @var resource */
+    private $stdout;
+
+    /** @var resource */
+    private $stderr;
+
+    /**
+     * @param resource|null $stdout
+     * @param resource|null $stderr
+     */
+    public function __construct(private CloudToolset $toolset, $stdout = null, $stderr = null)
+    {
+        $this->stdout = $stdout ?? STDOUT;
+        $this->stderr = $stderr ?? STDERR;
+    }
 
     /**
      * 阻塞式读取，每行一条 JSON-RPC 消息；客户端关闭 stdin(EOF)即退出。
@@ -36,12 +50,21 @@ class McpLoop
                 continue;
             }
 
-            $msg = json_decode($line, true);
-            if (! is_array($msg)) {
+            $decoded = json_decode($line);
+            if (json_last_error() !== JSON_ERROR_NONE) {
                 $this->send(['jsonrpc' => '2.0', 'id' => null, 'error' => ['code' => -32700, 'message' => 'Parse error']]);
 
                 continue;
             }
+            // MCP 每行是一条 JSON-RPC Request/Notification 对象；顶层数组（batch）或标量
+            // 不在本极简 server 的传输契约内，属于 Invalid Request 而不是 notification。
+            if (! is_object($decoded)) {
+                $this->send(['jsonrpc' => '2.0', 'id' => null, 'error' => ['code' => -32600, 'message' => 'Invalid Request']]);
+
+                continue;
+            }
+
+            $msg = json_decode($line, true);
 
             $this->dispatch($msg);
         }
@@ -50,20 +73,42 @@ class McpLoop
     /** 路由单条 JSON-RPC 消息。 */
     private function dispatch(array $msg): void
     {
-        // 通知（无 id 成员）一律不回任何包（JSON-RPC 2.0：服务端 MUST NOT 回应通知）。
-        // 目前没有需要处理副作用的通知，notifications/initialized、cancelled 等直接忽略。
-        // 注意 id 可以为 null —— 那是请求，故按 array_key_exists 而非 ?? 判定。
-        if (! array_key_exists('id', $msg)) {
+        $hasId = array_key_exists('id', $msg);
+        $id    = $hasId ? $msg['id'] : null;
+        // JSON-RPC id 只能是 String / Number / Null。畸形 id 不得原样回显，错误响应统一 id=null。
+        if ($hasId && ! is_string($id) && ! is_int($id) && ! is_float($id) && $id !== null) {
+            $this->replyError(null, -32600, 'Invalid Request');
+
+            return;
+        }
+        if (($msg['jsonrpc'] ?? null) !== '2.0' || ! isset($msg['method']) || ! is_string($msg['method']) || $msg['method'] === '') {
+            $this->replyError($id, -32600, 'Invalid Request');
+
+            return;
+        }
+        if (array_key_exists('params', $msg) && ! is_array($msg['params'])) {
+            $this->replyError($id, -32602, 'Invalid params');
+
             return;
         }
 
-        $id     = $msg['id'];
-        $method = (string) ($msg['method'] ?? '');
-        $params = (array) ($msg['params'] ?? []);
+        // 只有通过 Request 结构校验的无 id 消息才是 notification；合法 notification 一律不回包。
+        // 目前没有需要处理副作用的 notification，initialized / cancelled / 未知方法均直接忽略。
+        if (! $hasId) {
+            return;
+        }
+
+        $method = $msg['method'];
+        $params = $msg['params'] ?? [];
 
         try {
             switch ($method) {
                 case 'initialize':
+                    if (array_key_exists('protocolVersion', $params) && ! is_string($params['protocolVersion'])) {
+                        $this->replyError($id, -32602, 'Invalid params');
+
+                        break;
+                    }
                     $this->reply($id, $this->onInitialize($params));
                     break;
 
@@ -72,9 +117,15 @@ class McpLoop
                     break;
 
                 case 'tools/call':
+                    if (! isset($params['name']) || ! is_string($params['name']) || $params['name'] === ''
+                                                 || (array_key_exists('arguments', $params) && ! is_array($params['arguments']))) {
+                        $this->replyError($id, -32602, 'Invalid params');
+
+                        break;
+                    }
                     $this->reply($id, $this->toolset->call(
-                        (string) ($params['name'] ?? ''),
-                        (array) ($params['arguments'] ?? []),
+                        $params['name'],
+                        $params['arguments'] ?? [],
                     ));
                     break;
 
@@ -86,7 +137,7 @@ class McpLoop
                     $this->replyError($id, -32601, "Method not found: {$method}");
             }
         } catch (Throwable $e) {
-            fwrite(STDERR, '[moo:cloud:mcp] 处理 ' . $method . ' 异常：' . $e->getMessage() . "\n");
+            fwrite($this->stderr, '[moo:cloud:mcp] 处理 ' . $method . ' 异常：' . $e->getMessage() . "\n");
             $this->replyError($id, -32603, 'Internal error: ' . $e->getMessage());
         }
     }
@@ -94,7 +145,7 @@ class McpLoop
     /** initialize：回应协议版本 + 能力 + 服务端信息。只回显支持的版本，否则回退。 */
     private function onInitialize(array $params): array
     {
-        $requested = (string) ($params['protocolVersion'] ?? '');
+        $requested = $params['protocolVersion'] ?? '';
         $version   = in_array($requested, self::SUPPORTED_PROTOCOLS, true)
             ? $requested
             : self::SUPPORTED_PROTOCOLS[0];
@@ -122,7 +173,7 @@ class McpLoop
     /** 一条 JSON-RPC 消息写到 STDOUT（单行 + 换行）。 */
     private function send(array $msg): void
     {
-        fwrite(STDOUT, json_encode($msg, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n");
-        fflush(STDOUT);
+        fwrite($this->stdout, json_encode($msg, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n");
+        fflush($this->stdout);
     }
 }
