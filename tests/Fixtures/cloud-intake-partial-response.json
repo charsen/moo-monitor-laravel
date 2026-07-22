@@ -1,0 +1,29 @@
+{
+    "ok": true,
+    "saved": 1,
+    "skipped": 1,
+    "filtered": 1,
+    "results": [
+        {
+            "index": 0,
+            "hash": "aaaaaaaaaaaa",
+            "status": "filtered",
+            "retryable": false,
+            "reason": "ingest_filter"
+        },
+        {
+            "index": 1,
+            "hash": "bbbbbbbbbbbb",
+            "status": "saved",
+            "retryable": false,
+            "reason": null
+        },
+        {
+            "index": 2,
+            "hash": "cccccccccccc",
+            "status": "skipped",
+            "retryable": true,
+            "reason": "upsert_failed"
+        }
+    ]
+}

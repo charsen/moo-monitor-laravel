@@ -73,19 +73,27 @@ class CloudPushCommand extends Command
                 $status = '跳过：' . $r['reason'];
             } elseif (! $r['ok']) {
                 $status = '失败：' . $r['error'];
+                if ($r['pushed'] > 0) {
+                    $status .= " · 已确认 {$r['pushed']}";
+                }
+                if (($r['rejected'] ?? 0) > 0) {
+                    $status .= " · 已隔离 {$r['rejected']}";
+                }
                 $failed = true;
-                // 失败批的 hash 列出来：某条被云端持久拒收会卡死整类游标（每分钟重推同一批又失败），
-                // 本地缓冲只增不减。运维据此定位毒记录：storage/moo-monitor/<type>/open|resolved/<hash>.yaml。
+                // 只列真正待重试的 hash；同批已 saved/filtered 的记录已有独立确认水位，不会重复上报。
                 $hashes = $r['failed_hashes'] ?? [];
                 if ($hashes !== []) {
                     $shown = array_slice($hashes, 0, 10);
                     $more  = count($hashes) > count($shown) ? ' 等 ' . count($hashes) . ' 条' : '';
-                    $this->warn("[{$t}] 卡住的记录 hash：" . implode(', ', $shown) . $more . '（游标不前进，本地缓冲将累积）');
+                    $this->warn("[{$t}] 待重试记录 hash：" . implode(', ', $shown) . $more . '（其余已完成项不会重发）');
                 }
             } elseif ($dryRun) {
                 $status = '待推 ' . $r['changed'] . ' 条（dry-run）';
             } else {
-                $status = $r['pushed'] > 0 ? "已推 {$r['pushed']} 条 / {$r['batches']} 批" : '无变化';
+                $status = $r['pushed'] > 0 ? "已确认 {$r['pushed']} 条 / {$r['batches']} 批" : '无变化';
+                if (($r['rejected'] ?? 0) > 0) {
+                    $status .= " · 已隔离 {$r['rejected']}";
+                }
             }
 
             // 推送成功后回收本地（临时缓冲）；失败/跳过/dry-run 一律不动，确保只清已上云的。

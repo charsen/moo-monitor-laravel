@@ -25,11 +25,50 @@ Common failure response:
 Success:
 
 ```json
-{ "ok": true, "saved": 1 }
+{
+  "ok": true,
+  "saved": 1,
+  "filtered": 1,
+  "skipped": 1,
+  "results": [
+    {
+      "index": 0,
+      "hash": "aaaaaaaaaaaa",
+      "status": "saved",
+      "retryable": false,
+      "reason": null
+    },
+    {
+      "index": 1,
+      "hash": "bbbbbbbbbbbb",
+      "status": "filtered",
+      "retryable": false,
+      "reason": "ingest_filter"
+    },
+    {
+      "index": 2,
+      "hash": "cccccccccccc",
+      "status": "skipped",
+      "retryable": true,
+      "reason": "upsert_failed"
+    }
+  ]
+}
 ```
 
-`saved` must equal `records.length`. A smaller value is treated as a failed
-batch so the local cursor does not advance.
+`results` contains one item for every request record. `index` and `hash` must
+match that record; `status` is `saved`, `filtered`, or `skipped`; and the item
+counts must match the aggregate `saved`, `filtered`, and `skipped` fields.
+
+`saved` and `filtered` are final acknowledgements and are not sent again. A
+retryable `skipped` item remains pending by itself. A non-retryable `skipped`
+item is moved to the local `cloud-rejected` quarantine for investigation. A
+`skipped` item must include a non-empty `reason`.
+
+For rolling upgrades, the client accepts a legacy response without `results`
+only when `skipped` is zero and `saved + filtered` equals `records.length`.
+Missing, malformed, duplicated, or inconsistent acknowledgement fields fail
+the request without advancing the cursor.
 
 ### Slow Queries
 

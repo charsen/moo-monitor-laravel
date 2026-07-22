@@ -22,6 +22,8 @@
 - 「明确不做」清单（方案末节）都是刻意取舍，禁止当优化点：CloudSync 不加 mtime 预筛、record 热路径不加 flock、不复活 index.yaml、不用 Http::retry(throw:)（L8 fatal）、MCP 不引三方 SDK、不 set_error_handler 全局接管、不采 deprecation。
 - 任何新采集钩子必须自带防回环设计：本包 safeLog 输出的日志绝不能被自己的日志钩子再采集。
 - 云端 intake 契约只增字段、不改既有字段语义（云端按 (project, hash) upsert）。
+- Cloud intake 以逐条 `results` 回执确认：`saved` / `filtered` 立即记账且不重发，retryable `skipped` 只重试自身，non-retryable `skipped` 移入 `cloud-rejected`；聚合计数必须与逐条结果闭合，旧 Cloud 仅在 `skipped=0` 且聚合计数闭合时兼容无 `results` 响应。
+- Cloud/Monitor 的逐条回执 consumer-driven contract fixture 镜像在两仓 `tests/Fixtures/cloud-intake-partial-response.json`；Cloud 必须生成该形状，Monitor 必须能严格解析同一形状。
 - 版本号沿 0.1.x 小步发布（当前 0.1.9），不跳 0.2.0 —— 2026-07-09 用户拍板，别按 semver 惯例自作主张升 minor。
 - 采集钩子开关口径（2026-07-09 确认）：旁路钩子（log_context / queue_failed / log_message / http_5xx / schedule_exit）独立开关、默认开；reportable 主链由 auto_hook 总控；调度异常走主链不设独立开关，过滤下沉 host 的 dontReport。
 - 中文文案全角标点 +「」引号；开源仓（CHANGELOG/注释/文档）不出现私有宿主项目名，只描述技术触发场景。

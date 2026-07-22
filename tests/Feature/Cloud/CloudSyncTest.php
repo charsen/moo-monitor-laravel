@@ -66,7 +66,7 @@ function cloudSync_seedSlow(string $sql = 'select * from users where id = ?'): s
 // ─────────────────────────────────────────────────────────────────────────
 
 it('推送 runtime 记录:命中正确端点,带 token + records[].hash', function () {
-    Http::fake(['*' => Http::response(['ok' => true, 'saved' => 1])]);
+    Http::fake(['*' => Http::response(['ok' => true, 'saved' => 1, 'filtered' => 0, 'skipped' => 0])]);
 
     $hash = cloudSync_seedRuntime();
     $r    = (new CloudSync($this->cursor))->sync('runtimes');
@@ -86,7 +86,7 @@ it('推送 runtime 记录:命中正确端点,带 token + records[].hash', functi
 });
 
 it('推送慢 SQL 记录到 slow-queries intake', function () {
-    Http::fake(['*' => Http::response(['ok' => true, 'saved' => 1])]);
+    Http::fake(['*' => Http::response(['ok' => true, 'saved' => 1, 'filtered' => 0, 'skipped' => 0])]);
 
     cloudSync_seedSlow();
     $r = (new CloudSync($this->cursor))->sync('slow_sql');
@@ -96,7 +96,7 @@ it('推送慢 SQL 记录到 slow-queries intake', function () {
 });
 
 it('游标增量:第二次无新增 → 不再推送', function () {
-    Http::fake(['*' => Http::response(['ok' => true, 'saved' => 1])]);
+    Http::fake(['*' => Http::response(['ok' => true, 'saved' => 1, 'filtered' => 0, 'skipped' => 0])]);
 
     cloudSync_seedRuntime();
     $sync = new CloudSync($this->cursor);
@@ -112,8 +112,157 @@ it('游标增量:第二次无新增 → 不再推送', function () {
     Http::assertSentCount(1); // 仅第一次发了请求
 });
 
+it('过滤记录也算已确认：推进游标且下一轮不重发', function () {
+    cloudSync_seedRuntime('saved runtime');
+    cloudSync_seedRuntime('filtered runtime');
+    $sync = new CloudSync($this->cursor);
+
+    Http::fake(function ($request) {
+        $records = $request['records'];
+
+        return Http::response([
+            'ok'       => true,
+            'saved'    => 1,
+            'filtered' => 1,
+            'skipped'  => 0,
+            'results'  => [
+                ['index' => 0, 'hash' => $records[0]['hash'], 'status' => 'saved', 'retryable' => false, 'reason' => null],
+                ['index' => 1, 'hash' => $records[1]['hash'], 'status' => 'filtered', 'retryable' => false, 'reason' => 'ingest_filter'],
+            ],
+        ]);
+    });
+
+    $first = $sync->sync('runtimes');
+    expect($first['ok'])->toBeTrue()
+        ->and($first['changed'])->toBe(2)
+        ->and($first['pushed'])->toBe(2);
+    expect(is_file($this->cursor))->toBeTrue();
+
+    $second = $sync->sync('runtimes');
+    expect($second['ok'])->toBeTrue()
+        ->and($second['changed'])->toBe(0)
+        ->and($second['pushed'])->toBe(0);
+
+    Http::assertSentCount(1);
+});
+
+it('逐条回执：只重试 retryable skipped，已 saved/filtered 的记录不重发', function () {
+    $calls     = 0;
+    $retryHash = null;
+    Http::fake(function ($request) use (&$calls, &$retryHash) {
+        $calls++;
+        $records = $request['records'];
+        if ($calls === 1) {
+            $retryHash = $records[1]['hash'];
+
+            return Http::response([
+                'ok'       => true,
+                'saved'    => 1,
+                'filtered' => 1,
+                'skipped'  => 1,
+                'results'  => [
+                    ['index' => 0, 'hash' => $records[0]['hash'], 'status' => 'saved', 'retryable' => false, 'reason' => null],
+                    ['index' => 1, 'hash' => $records[1]['hash'], 'status' => 'skipped', 'retryable' => true, 'reason' => 'upsert_failed'],
+                    ['index' => 2, 'hash' => $records[2]['hash'], 'status' => 'filtered', 'retryable' => false, 'reason' => 'ingest_filter'],
+                ],
+            ]);
+        }
+
+        expect($records)->toHaveCount(1)
+            ->and($records[0]['hash'])->toBe($retryHash);
+
+        return Http::response(['ok' => true, 'saved' => 1, 'filtered' => 0, 'skipped' => 0]);
+    });
+
+    cloudSync_seedRuntime('partial saved');
+    cloudSync_seedRuntime('partial retry');
+    cloudSync_seedRuntime('partial filtered');
+    $sync = new CloudSync($this->cursor);
+
+    $first = $sync->sync('runtimes');
+    expect($first['ok'])->toBeFalse()
+        ->and($first['pushed'])->toBe(2)
+        ->and($first['rejected'])->toBe(0)
+        ->and($first['failed_hashes'])->toBe([$retryHash])
+        ->and(is_file($this->cursor . '.acks'))->toBeTrue();
+
+    $dry = $sync->sync('runtimes', dryRun: true);
+    expect($dry['changed'])->toBe(1);
+
+    $retry = $sync->sync('runtimes');
+    expect($retry['ok'])->toBeTrue()
+        ->and($retry['changed'])->toBe(1)
+        ->and($retry['pushed'])->toBe(1);
+
+    $done = $sync->sync('runtimes');
+    expect($done['changed'])->toBe(0);
+    Http::assertSentCount(2);
+});
+
+it('永久 skipped 单文件移入 cloud-rejected，不影响同批成功项和游标', function () {
+    $rejectedHash = null;
+    Http::fake(function ($request) use (&$rejectedHash) {
+        $records      = $request['records'];
+        $rejectedHash = $records[1]['hash'];
+
+        return Http::response([
+            'ok'       => true,
+            'saved'    => 1,
+            'filtered' => 0,
+            'skipped'  => 1,
+            'results'  => [
+                ['index' => 0, 'hash' => $records[0]['hash'], 'status' => 'saved', 'retryable' => false, 'reason' => null],
+                ['index' => 1, 'hash' => $records[1]['hash'], 'status' => 'skipped', 'retryable' => false, 'reason' => 'invalid_record'],
+            ],
+        ]);
+    });
+
+    cloudSync_seedRuntime('accepted runtime');
+    cloudSync_seedRuntime('rejected runtime');
+    $sync = new CloudSync($this->cursor);
+
+    $r = $sync->sync('runtimes');
+    expect($r['ok'])->toBeTrue()
+        ->and($r['pushed'])->toBe(1)
+        ->and($r['rejected'])->toBe(1)
+        ->and($r['rejected_hashes'])->toBe([$rejectedHash]);
+
+    $base = storage_path('moo-monitor/runtimes');
+    expect(is_file($base . '/open/' . $rejectedHash . '.yaml'))->toBeFalse()
+        ->and(glob($base . '/cloud-rejected/' . $rejectedHash . '-*.yaml'))->toHaveCount(1);
+
+    $second = $sync->sync('runtimes');
+    expect($second['changed'])->toBe(0);
+    Http::assertSentCount(1);
+});
+
+it('部分失败时，已确认的 resolved 文件立即单独回收', function () {
+    $openHash     = 'aaaaaaaaaaaa';
+    $resolvedHash = 'bbbbbbbbbbbb';
+    cloudSync_writeRecord('open', $openHash, now()->toIso8601String());
+    cloudSync_writeRecord('resolved', $resolvedHash, now()->toIso8601String(), 'resolved');
+
+    Http::fake(function ($request) use ($openHash, $resolvedHash) {
+        $results = [];
+        foreach ($request['records'] as $index => $rec) {
+            $results[] = $rec['hash'] === $resolvedHash
+                ? ['index' => $index, 'hash' => $resolvedHash, 'status' => 'saved', 'retryable' => false, 'reason' => null]
+                : ['index' => $index, 'hash' => $openHash, 'status' => 'skipped', 'retryable' => true, 'reason' => 'upsert_failed'];
+        }
+
+        return Http::response(['ok' => true, 'saved' => 1, 'filtered' => 0, 'skipped' => 1, 'results' => $results]);
+    });
+
+    $sync = new CloudSync($this->cursor);
+    $r    = $sync->sync('runtimes');
+
+    expect($r['ok'])->toBeFalse()
+        ->and(is_file(storage_path('moo-monitor/runtimes/resolved/' . $resolvedHash . '.yaml')))->toBeFalse()
+        ->and(is_file(storage_path('moo-monitor/runtimes/open/' . $openHash . '.yaml')))->toBeTrue();
+});
+
 it('--all 忽略游标:即便无新增也全量重推', function () {
-    Http::fake(['*' => Http::response(['ok' => true, 'saved' => 1])]);
+    Http::fake(['*' => Http::response(['ok' => true, 'saved' => 1, 'filtered' => 0, 'skipped' => 0])]);
 
     cloudSync_seedRuntime();
     $sync = new CloudSync($this->cursor);
@@ -126,7 +275,7 @@ it('--all 忽略游标:即便无新增也全量重推', function () {
 });
 
 it('dry-run 只统计不发请求', function () {
-    Http::fake(['*' => Http::response(['ok' => true, 'saved' => 1])]);
+    Http::fake(['*' => Http::response(['ok' => true, 'saved' => 1, 'filtered' => 0, 'skipped' => 0])]);
 
     cloudSync_seedRuntime();
     $r = (new CloudSync($this->cursor))->sync('runtimes', all: false, dryRun: true);
@@ -161,7 +310,7 @@ it('云端返回失败:ok=false 且游标不前进,下次可重试', function ()
     // 先失败一次,再成功一次
     Http::fakeSequence()
         ->push(['ok' => false, 'error' => '炸了'], 200)
-        ->push(['ok' => true, 'saved' => 1], 200);
+        ->push(['ok' => true, 'saved' => 1, 'filtered' => 0, 'skipped' => 0], 200);
 
     cloudSync_seedRuntime();
     $sync = new CloudSync($this->cursor);
@@ -175,7 +324,7 @@ it('云端返回失败:ok=false 且游标不前进,下次可重试', function ()
 });
 
 it('坏 yaml 文件被跳过,不阻断整体', function () {
-    Http::fake(['*' => Http::response(['ok' => true, 'saved' => 1])]);
+    Http::fake(['*' => Http::response(['ok' => true, 'saved' => 1, 'filtered' => 0, 'skipped' => 0])]);
 
     $hash = cloudSync_seedRuntime();
     // 投一个坏文件进 open 桶
@@ -186,7 +335,7 @@ it('坏 yaml 文件被跳过,不阻断整体', function () {
 });
 
 it('推送以文件名 hash 为准,跳过非法文件名', function () {
-    Http::fake(['*' => Http::response(['ok' => true, 'saved' => 1])]);
+    Http::fake(['*' => Http::response(['ok' => true, 'saved' => 1, 'filtered' => 0, 'skipped' => 0])]);
 
     $dir = storage_path('moo-monitor/runtimes/open');
     @mkdir($dir, 0755, true);
@@ -202,7 +351,7 @@ it('推送以文件名 hash 为准,跳过非法文件名', function () {
 });
 
 it('无 updated_at/last_seen 的 legacy 记录:推一次后游标越过,不再重推(mtime 兜底,2026-06-09 修)', function () {
-    Http::fake(['*' => Http::response(['ok' => true, 'saved' => 1])]);
+    Http::fake(['*' => Http::response(['ok' => true, 'saved' => 1, 'filtered' => 0, 'skipped' => 0])]);
 
     // 手写一个无任何时间戳的 open 记录(legacy / 手改 yaml)
     $dir = storage_path('moo-monitor/runtimes/open');
@@ -223,7 +372,7 @@ it('无 updated_at/last_seen 的 legacy 记录:推一次后游标越过,不再�
 });
 
 it('增量读取以 yaml 时间戳为准,不因旧 mtime 漏推', function () {
-    Http::fake(['*' => Http::response(['ok' => true, 'saved' => 1])]);
+    Http::fake(['*' => Http::response(['ok' => true, 'saved' => 1, 'filtered' => 0, 'skipped' => 0])]);
 
     $cursor = now();
     file_put_contents($this->cursor, json_encode(['runtimes' => $cursor->toIso8601String()]));
@@ -243,7 +392,7 @@ it('增量读取以 yaml 时间戳为准,不因旧 mtime 漏推', function () {
 });
 
 it('writeState:先推 runtimes 再推 slow_sql,两个游标都保留(read-modify-write 不互覆盖)', function () {
-    Http::fake(['*' => Http::response(['ok' => true, 'saved' => 1])]);
+    Http::fake(['*' => Http::response(['ok' => true, 'saved' => 1, 'filtered' => 0, 'skipped' => 0])]);
 
     cloudSync_seedRuntime();
     cloudSync_seedSlow();
@@ -259,7 +408,7 @@ it('writeState:先推 runtimes 再推 slow_sql,两个游标都保留(read-modify
 });
 
 it('记录目录与游标目录自带自我屏蔽 .gitignore(storage 数据不入宿主 git)', function () {
-    Http::fake(['*' => Http::response(['ok' => true, 'saved' => 1])]);
+    Http::fake(['*' => Http::response(['ok' => true, 'saved' => 1, 'filtered' => 0, 'skipped' => 0])]);
 
     cloudSync_seedRuntime();
     (new CloudSync)->sync('runtimes'); // 默认游标位置 → storage/moo-monitor/cloud-sync.json
