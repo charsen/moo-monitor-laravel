@@ -28,6 +28,16 @@ class CloudClientTest extends TestCase
         ]);
     }
 
+    private function contractFixture(): array
+    {
+        $json = file_get_contents(__DIR__ . '/../../Fixtures/cloud-intake-partial-response.json');
+        $this->assertNotFalse($json);
+        $fixture = json_decode((string) $json, true, 512, JSON_THROW_ON_ERROR);
+        $this->assertIsArray($fixture);
+
+        return $fixture;
+    }
+
     public function test_not_configured_returns_error_without_request(): void
     {
         Http::fake();
@@ -92,11 +102,56 @@ class CloudClientTest extends TestCase
         $this->assertNotNull($r['error']);
     }
 
-    public function test_send_treats_partial_saved_count_as_failure(): void
+    public function test_send_accepts_legacy_complete_response_without_item_results(): void
     {
         $this->configureCloud();
         Http::fake([
-            'cloud.test/api/v1/runtimes/intake' => Http::response(['ok' => true, 'saved' => 1], 200),
+            'cloud.test/api/v1/runtimes/intake' => Http::response([
+                'ok' => true, 'saved' => 1, 'filtered' => 1, 'skipped' => 0,
+            ], 200),
+        ]);
+
+        $r = (new CloudClient)->send(CloudClient::PATH_RUNTIMES, [
+            ['hash' => 'aaaaaaaaaaaa'],
+            ['hash' => 'bbbbbbbbbbbb'],
+        ]);
+
+        $this->assertTrue($r['ok']);
+        $this->assertSame(1, $r['saved']);
+        $this->assertSame(1, $r['filtered']);
+        $this->assertSame(0, $r['skipped']);
+        $this->assertNull($r['error']);
+    }
+
+    public function test_send_accepts_partial_response_with_valid_item_results(): void
+    {
+        $this->configureCloud();
+        $fixture = $this->contractFixture();
+        Http::fake([
+            'cloud.test/api/v1/runtimes/intake' => Http::response($fixture, 200),
+        ]);
+
+        $r = (new CloudClient)->send(CloudClient::PATH_RUNTIMES, [
+            ['hash' => 'aaaaaaaaaaaa'],
+            ['hash' => 'bbbbbbbbbbbb'],
+            ['hash' => 'cccccccccccc'],
+        ]);
+
+        $this->assertTrue($r['ok']);
+        $this->assertSame(1, $r['saved']);
+        $this->assertSame(1, $r['filtered']);
+        $this->assertSame(1, $r['skipped']);
+        $this->assertSame($fixture['results'], $r['results']);
+        $this->assertNull($r['error']);
+    }
+
+    public function test_send_rejects_partial_response_without_item_results(): void
+    {
+        $this->configureCloud();
+        Http::fake([
+            'cloud.test/api/v1/runtimes/intake' => Http::response([
+                'ok' => true, 'saved' => 1, 'filtered' => 0, 'skipped' => 1,
+            ], 200),
         ]);
 
         $r = (new CloudClient)->send(CloudClient::PATH_RUNTIMES, [
@@ -105,17 +160,55 @@ class CloudClientTest extends TestCase
         ]);
 
         $this->assertFalse($r['ok']);
-        $this->assertSame(1, $r['saved']);
-        $this->assertSame('saved 1/2', $r['error']);
+        $this->assertSame([], $r['results']);
+        $this->assertStringContainsString('results missing', $r['error']);
     }
 
-    public function test_send_treats_missing_saved_field_as_failure(): void
+    public function test_send_treats_missing_acknowledgement_fields_as_failure(): void
     {
-        // 审查 #10:云端 2xx + ok:true 但缺 saved 字段时,不能乐观默认成「全部成功」前进游标(=丢数据)。
-        // 缺字段 → saved=-1(records 非空,永不等于 count)→ ok=false → 不前进游标 → 下轮幂等重推。
+        // 云端 2xx + ok:true 但缺确认字段时，不能乐观默认成「全部成功」前进游标（会丢数据）。
         $this->configureCloud();
         Http::fake([
-            'cloud.test/api/v1/runtimes/intake' => Http::response(['ok' => true], 200),
+            'cloud.test/api/v1/runtimes/intake' => Http::response(['ok' => true, 'saved' => 2], 200),
+        ]);
+
+        $r = (new CloudClient)->send(CloudClient::PATH_RUNTIMES, [
+            ['hash' => 'aaaaaaaaaaaa'],
+            ['hash' => 'bbbbbbbbbbbb'],
+        ]);
+
+        $this->assertFalse($r['ok']);
+        $this->assertSame(2, $r['saved']);
+        $this->assertSame(-1, $r['filtered']);
+        $this->assertSame(-1, $r['skipped']);
+        $this->assertSame([], $r['results']);
+    }
+
+    public function test_send_treats_unclosed_counts_as_failure(): void
+    {
+        $this->configureCloud();
+        Http::fake([
+            'cloud.test/api/v1/runtimes/intake' => Http::response([
+                'ok' => true, 'saved' => 1, 'filtered' => 0, 'skipped' => 0,
+            ], 200),
+        ]);
+
+        $r = (new CloudClient)->send(CloudClient::PATH_RUNTIMES, [
+            ['hash' => 'aaaaaaaaaaaa'],
+            ['hash' => 'bbbbbbbbbbbb'],
+        ]);
+
+        $this->assertFalse($r['ok']);
+        $this->assertStringContainsString('sent 2 / saved 1 / filtered 0 / skipped 0', $r['error']);
+    }
+
+    public function test_send_treats_non_integer_acknowledgement_fields_as_failure(): void
+    {
+        $this->configureCloud();
+        Http::fake([
+            'cloud.test/api/v1/runtimes/intake' => Http::response([
+                'ok' => true, 'saved' => null, 'filtered' => 2, 'skipped' => false,
+            ], 200),
         ]);
 
         $r = (new CloudClient)->send(CloudClient::PATH_RUNTIMES, [
@@ -125,6 +218,31 @@ class CloudClientTest extends TestCase
 
         $this->assertFalse($r['ok']);
         $this->assertSame(-1, $r['saved']);
+        $this->assertSame(2, $r['filtered']);
+        $this->assertSame(-1, $r['skipped']);
+    }
+
+    public function test_send_rejects_item_results_that_do_not_match_the_batch(): void
+    {
+        $this->configureCloud();
+        Http::fake([
+            'cloud.test/api/v1/runtimes/intake' => Http::response([
+                'ok'      => true, 'saved' => 1, 'filtered' => 0, 'skipped' => 1,
+                'results' => [
+                    ['index' => 0, 'hash' => 'aaaaaaaaaaaa', 'status' => 'saved', 'retryable' => false, 'reason' => null],
+                    ['index' => 1, 'hash' => 'wrong-hash', 'status' => 'skipped', 'retryable' => false, 'reason' => 'invalid_record'],
+                ],
+            ], 200),
+        ]);
+
+        $r = (new CloudClient)->send(CloudClient::PATH_RUNTIMES, [
+            ['hash' => 'aaaaaaaaaaaa'],
+            ['hash' => 'bbbbbbbbbbbb'],
+        ]);
+
+        $this->assertFalse($r['ok']);
+        $this->assertSame([], $r['results']);
+        $this->assertStringContainsString('results invalid', $r['error']);
     }
 
     // ---- runtime 读/写(供 moo:cloud:mcp) ----------------------------------

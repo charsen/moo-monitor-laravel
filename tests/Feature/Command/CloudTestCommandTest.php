@@ -9,7 +9,7 @@ use Mooeen\Monitor\Cloud\CloudClient;
  *   - 心跳失败:FAILURE,不推任何记录
  *   - 全绿:两条 intake 各收到 1 条带 token 的记录,默认不 resolve(保留「未处理」),退出 0
  *   - --resolve:推送后才 resolve;--type:只测指定类型
- *   - 云端缺 saved / saved 不符:视为失败(承接 #10 fail-closed)
+ *   - 云端缺确认计数 / 计数不闭合:视为失败(承接 #10 fail-closed)
  */
 function cloudTest_configure(): void
 {
@@ -26,9 +26,9 @@ function cloudTest_fakeAllOk(): void
 {
     Http::fake([
         'cloud.test/api/v1/heartbeat'           => Http::response(['ok' => true], 200),
-        'cloud.test/api/v1/runtimes/intake'     => Http::response(['ok' => true, 'saved' => 1], 200),
+        'cloud.test/api/v1/runtimes/intake'     => Http::response(['ok' => true, 'saved' => 1, 'filtered' => 0, 'skipped' => 0], 200),
         'cloud.test/api/v1/runtimes/resolve'    => Http::response(['ok' => true, 'runtime' => ['status' => 'resolved']], 200),
-        'cloud.test/api/v1/slow-queries/intake' => Http::response(['ok' => true, 'saved' => 1], 200),
+        'cloud.test/api/v1/slow-queries/intake' => Http::response(['ok' => true, 'saved' => 1, 'filtered' => 0, 'skipped' => 0], 200),
     ]);
 }
 
@@ -101,12 +101,12 @@ it('--type=runtimes → 只推 runtime,不碰慢 SQL', function () {
     Http::assertNotSent(fn ($req) => str_contains((string) $req->url(), '/api/v1/slow-queries/intake'));
 });
 
-it('云端 intake 缺 saved 字段 → 自检失败(fail-closed)', function () {
+it('云端 intake 缺确认计数字段 → 自检失败(fail-closed)', function () {
     cloudTest_configure();
     Http::fake([
         'cloud.test/api/v1/heartbeat'           => Http::response(['ok' => true], 200),
-        'cloud.test/api/v1/runtimes/intake'     => Http::response(['ok' => true], 200), // 缺 saved
-        'cloud.test/api/v1/slow-queries/intake' => Http::response(['ok' => true, 'saved' => 1], 200),
+        'cloud.test/api/v1/runtimes/intake'     => Http::response(['ok' => true, 'saved' => 1], 200), // 缺 filtered / skipped
+        'cloud.test/api/v1/slow-queries/intake' => Http::response(['ok' => true, 'saved' => 1, 'filtered' => 0, 'skipped' => 0], 200),
     ]);
 
     $this->artisan('moo:cloud:test', ['--type' => 'runtimes'])->assertExitCode(1);

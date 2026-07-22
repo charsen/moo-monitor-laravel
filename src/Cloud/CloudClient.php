@@ -17,7 +17,8 @@ use Throwable;
  *   POST {base_url}/api/v1/{runtimes|slow-queries}/intake
  *   body = { token: <项目 token>, records: [ <yaml 记录原样>, ... ] }
  *   认证 = body 里的 token(ResolveProjectToken 中间件)；云端按 (project, hash) upsert。
- *   响应 = { ok: bool, saved: int } 或 { ok:false, error: string }
+ *   响应 = { ok: bool, saved: int, filtered: int, skipped: int, results?: ItemResult[] }
+ *   results 缺席仅兼容 skipped=0 的旧 Cloud；部分成功必须带逐条回执，调用方才能只重试失败项。
  */
 class CloudClient
 {
@@ -70,15 +71,15 @@ class CloudClient
      *
      * @param array<int,array<string,mixed>> $records
      *
-     * @return array{ok:bool,status:int,saved:int,error:?string}
+     * @return array{ok:bool,status:int,saved:int,filtered:int,skipped:int,results:array<int,array{index:int,hash:string,status:string,retryable:bool,reason:?string}>,error:?string}
      */
     public function send(string $path, array $records): array
     {
         if (! $this->configured()) {
-            return ['ok' => false, 'status' => 0, 'saved' => 0, 'error' => 'cloud base_url / token 未配置'];
+            return ['ok' => false, 'status' => 0, 'saved' => 0, 'filtered' => 0, 'skipped' => 0, 'results' => [], 'error' => 'cloud base_url / token 未配置'];
         }
         if ($records === []) {
-            return ['ok' => true, 'status' => 0, 'saved' => 0, 'error' => null];
+            return ['ok' => true, 'status' => 0, 'saved' => 0, 'filtered' => 0, 'skipped' => 0, 'results' => [], 'error' => null];
         }
 
         $url = $this->baseUrl . '/' . ltrim($path, '/');
@@ -97,21 +98,95 @@ class CloudClient
                 ->post($url, ['token' => $this->token, 'records' => array_values($records)]), 200);
 
             $body = (array) ($resp->json() ?? []);
-            // 契约：saved 必须等于 records.length，否则整批视为失败、游标不前进。saved 缺席时用 -1 哨兵
-            // (records 非空，见上方提前返回 → -1 永不等于 count)→ ok=false → 不前进游标 → 下轮幂等重推。
-            // 不能乐观默认成 count(records)：那会在「无法确认云端到底存了几条」时仍前进游标并回收本地 = 丢数据。
-            $saved = array_key_exists('saved', $body) ? (int) $body['saved'] : -1;
-            $ok    = $resp->successful() && ($body['ok'] ?? false) === true && $saved === count($records);
+            // 聚合计数必须完整覆盖 sent。skipped=0 时兼容旧 Cloud 不带 results；只要有 skipped，
+            // 就必须逐条给出 index/hash/status/retryable，调用方才能确认已完成项、只保留失败项。
+            $saved        = array_key_exists('saved', $body)    && is_int($body['saved']) ? $body['saved'] : -1;
+            $filtered     = array_key_exists('filtered', $body) && is_int($body['filtered']) ? $body['filtered'] : -1;
+            $skipped      = array_key_exists('skipped', $body)  && is_int($body['skipped']) ? $body['skipped'] : -1;
+            $sent         = count($records);
+            $countsClosed = $saved >= 0 && $filtered >= 0 && $skipped >= 0 && ($saved + $filtered + $skipped) === $sent;
+            $hasResults   = array_key_exists('results', $body);
+            $results      = $hasResults ? $this->parseItemResults($body['results'], $records, $saved, $filtered, $skipped) : null;
+            $acknowledged = $countsClosed && ($results !== null || (! $hasResults && $skipped === 0));
+
+            $ok = $resp->successful() && ($body['ok'] ?? false) === true && $acknowledged;
 
             return [
-                'ok'     => $ok,
-                'status' => $resp->status(),
-                'saved'  => $saved,
-                'error'  => $ok ? null : (string) ($body['error'] ?? ($resp->successful() ? "saved {$saved}/" . count($records) : ('HTTP ' . $resp->status()))),
+                'ok'       => $ok,
+                'status'   => $resp->status(),
+                'saved'    => $saved,
+                'filtered' => $filtered,
+                'skipped'  => $skipped,
+                'results'  => $results ?? [],
+                'error'    => $ok ? null : (string) ($body['error'] ?? ($resp->successful()
+                    ? "intake 确认无效：sent {$sent} / saved {$saved} / filtered {$filtered} / skipped {$skipped} / results " . ($hasResults ? 'invalid' : 'missing')
+                    : ('HTTP ' . $resp->status()))),
             ];
         } catch (Throwable $e) {
-            return ['ok' => false, 'status' => 0, 'saved' => 0, 'error' => $e->getMessage()];
+            return ['ok' => false, 'status' => 0, 'saved' => 0, 'filtered' => 0, 'skipped' => 0, 'results' => [], 'error' => $e->getMessage()];
         }
+    }
+
+    /**
+     * @param mixed                          $raw
+     * @param array<int,array<string,mixed>> $records
+     *
+     * @return array<int,array{index:int,hash:string,status:string,retryable:bool,reason:?string}>|null
+     */
+    private function parseItemResults($raw, array $records, int $saved, int $filtered, int $skipped): ?array
+    {
+        if (! is_array($raw) || count($raw) !== count($records)) {
+            return null;
+        }
+
+        $out    = [];
+        $seen   = [];
+        $counts = ['saved' => 0, 'filtered' => 0, 'skipped' => 0];
+        foreach ($raw as $item) {
+            if (! is_array($item)
+                || ! is_int($item['index'] ?? null)
+                || ! is_string($item['hash'] ?? null)
+                || ! is_string($item['status'] ?? null)
+                || ! is_bool($item['retryable'] ?? null)
+                || ! array_key_exists('reason', $item)
+                || (! is_null($item['reason'] ?? null) && ! is_string($item['reason'] ?? null))) {
+                return null;
+            }
+
+            $index  = $item['index'];
+            $status = $item['status'];
+            if (! isset($records[$index]) || isset($seen[$index]) || ! array_key_exists($status, $counts)) {
+                return null;
+            }
+            $expectedHash = (string) ($records[$index]['hash'] ?? '');
+            if ($expectedHash === '' || $item['hash'] !== $expectedHash) {
+                return null;
+            }
+            if ($status !== 'skipped' && $item['retryable']) {
+                return null;
+            }
+            if ($status === 'skipped' && (! is_string($item['reason']) || $item['reason'] === '')) {
+                return null;
+            }
+
+            $seen[$index] = true;
+            $counts[$status]++;
+            $out[$index] = [
+                'index'     => $index,
+                'hash'      => $item['hash'],
+                'status'    => $status,
+                'retryable' => $item['retryable'],
+                'reason'    => $item['reason'],
+            ];
+        }
+
+        if ($counts !== ['saved' => $saved, 'filtered' => $filtered, 'skipped' => $skipped]) {
+            return null;
+        }
+
+        ksort($out);
+
+        return array_values($out);
     }
 
     /**

@@ -170,15 +170,15 @@ php artisan moo:cloud:push
 
 ### 推送一直失败
 
-为保证不丢数据，某一类（runtimes / slow_sql）只要有一批推送失败，游标就不前进、下次重试同一批，该类的本地缓冲也不会被回收。因此**单条被云端持久拒收的记录会卡住整类推送并让本地缓冲持续增长**。
+云端会为批次中的每条记录返回处理结果。本地收到 `saved` 或 `filtered` 后立即确认该记录，后续不会重复上报；临时失败只重试对应记录，不会拖累同批其他记录。已经确认的 `resolved` 快照会在内容未发生变化时立即单文件回收。
 
-`moo:cloud:push` 失败时会打印卡住的记录 hash（自动调度的后台运行则写入日志），据此定位：
+`moo:cloud:push` 失败时会打印待重试记录的 hash（自动调度的后台运行则写入日志），据此定位：
 
 ```text
 storage/moo-monitor/<runtimes|sql-slows>/<open|resolved>/<hash>.yaml
 ```
 
-确认该记录无需保留后，可手动移走或删除对应 yaml，再重新推送。
+云端明确判定为不可重试的记录会自动移入 `storage/moo-monitor/cloud-rejected/` 留证，并不再阻塞游标。该目录中的 YAML 可用于排查字段或契约问题；确认无需保留后再手动清理即可。
 
 ## 自动推送
 
@@ -256,10 +256,12 @@ storage/moo-monitor/
 │   ├── open/
 │   ├── resolved/
 │   └── deleted/
-└── cloud-sync.json
+├── cloud-rejected/
+├── cloud-sync.json
+└── cloud-sync.json.acks
 ```
 
-该目录会自动写入 `.gitignore`，监控数据不会进入宿主项目 git。
+`cloud-sync.json.acks` 保存已逐条确认但尚未被全局游标覆盖的版本；同步完成后会自动收敛。该目录会自动写入 `.gitignore`，监控数据不会进入宿主项目 git。
 
 ## MCP 接入
 
