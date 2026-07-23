@@ -17,6 +17,7 @@ namespace Mooeen\Monitor\Command;
 
 use Illuminate\Console\Command;
 use Mooeen\Monitor\Recorder\RuntimeErrorRecorder;
+use Mooeen\Monitor\StorageScope;
 use Throwable;
 
 class MigrateCommand extends Command
@@ -37,11 +38,11 @@ class MigrateCommand extends Command
         $pairs = [
             'runtimes' => [
                 base_path((string) $this->option('from-runtimes')),
-                RuntimeErrorRecorder::resolveStoragePath((string) config('moo-monitor.runtime.path', 'moo-monitor/runtimes')),
+                RuntimeErrorRecorder::resolveStoragePath(StorageScope::scopePath((string) config('moo-monitor.runtime.path', 'moo-monitor/runtimes'))),
             ],
             'sql-slows' => [
                 base_path((string) $this->option('from-sql-slows')),
-                RuntimeErrorRecorder::resolveStoragePath((string) config('moo-monitor.sql_slow.path', 'moo-monitor/sql-slows')),
+                RuntimeErrorRecorder::resolveStoragePath(StorageScope::scopePath((string) config('moo-monitor.sql_slow.path', 'moo-monitor/sql-slows'))),
             ],
         ];
 
@@ -153,7 +154,7 @@ class MigrateCommand extends Command
     private function migrateCursor(bool $dryRun): bool
     {
         $old = storage_path('app/scaffold/cloud-sync.json');
-        $new = storage_path('moo-monitor/cloud-sync.json');
+        $new = StorageScope::scopeFile(storage_path('moo-monitor/cloud-sync.json'));
         if (! is_file($old)) {
             return false;
         }

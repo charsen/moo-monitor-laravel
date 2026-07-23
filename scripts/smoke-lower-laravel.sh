@@ -34,12 +34,12 @@ export COMPOSER_NO_SECURITY_BLOCKING=1
 echo "==> 冒烟目标：laravel/laravel ${CONSTRAINT}"
 echo "==> 被测包：${PKG_DIR}"
 
-echo "==> [1/5] 建临时 Laravel app"
+echo "==> [1/6] 建临时 Laravel app"
 COMPOSER_MEMORY_LIMIT=-1 composer create-project "laravel/laravel:${CONSTRAINT}" "$WORK/app" \
   --no-interaction --prefer-dist --quiet
 
 cd "$WORK/app"
-echo "==> [2/5] 用 path 仓库安装本包"
+echo "==> [2/6] 用 path 仓库安装本包"
 composer config repositories.monitor \
   "{\"type\":\"path\",\"url\":\"${PKG_DIR}\",\"options\":{\"symlink\":false}}" >/dev/null
 COMPOSER_MEMORY_LIMIT=-1 composer require "charsen/moo-monitor-laravel:@dev" -W --no-interaction --quiet
@@ -47,14 +47,42 @@ COMPOSER_MEMORY_LIMIT=-1 composer require "charsen/moo-monitor-laravel:@dev" -W 
 LARAVEL_VER="$(php -d "$ER" artisan --version 2>/dev/null)"
 echo "    实际：${LARAVEL_VER}"
 
-echo "==> [3/5] 断言 provider boot + 4 个命令注册"
+echo "==> [3/6] 断言 provider boot + 4 个命令注册"
 LIST="$(php -d "$ER" artisan list 2>/dev/null)"
 for cmd in moo:cloud:push moo:cloud:test moo:cloud:mcp moo:monitor:migrate; do
   echo "$LIST" | grep -q "$cmd" || { echo "✗ 失败：命令 ${cmd} 未注册（provider 未能 boot？）"; exit 1; }
 done
 echo "    ok：4 个命令均注册"
 
-echo "==> [4/5] 断言低版本 Finished-only 非零退出仍采集一次"
+echo "==> [4/6] 断言自动 push 继承 --env 且不同环境使用独立互斥锁"
+php -d "$ER" -r '
+require "vendor/autoload.php";
+$_SERVER["argv"] = ["artisan", "schedule:run", "--env=LOWER_A"];
+$app = require "bootstrap/app.php";
+$app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+config()->set("moo-monitor.cloud.enabled", true);
+config()->set("moo-monitor.cloud.schedule", true);
+$schedule = $app->make(Illuminate\Console\Scheduling\Schedule::class);
+$app->instance("env", "LOWER_A");
+(new Mooeen\Monitor\MonitorProvider($app))->boot();
+$events = $schedule->events();
+$a = $events[array_key_last($events)];
+$_SERVER["argv"] = ["artisan", "schedule:run", "--env=LOWER_B"];
+$app->instance("env", "LOWER_B");
+(new Mooeen\Monitor\MonitorProvider($app))->boot();
+$events = $schedule->events();
+$b = $events[array_key_last($events)];
+if (! str_contains($a->command, "--env=") || ! str_contains($a->command, "LOWER_A")
+    || ! str_contains($b->command, "--env=") || ! str_contains($b->command, "LOWER_B")
+    || $a->mutexName() === $b->mutexName()
+    || $a->runInBackground || $b->runInBackground) {
+    fwrite(STDERR, "Scoped schedule smoke failed: a={$a->command}; b={$b->command}\n");
+    exit(1);
+}
+'
+echo "    ok：--env 已传递，mutex 独立且由原进程可靠释放"
+
+echo "==> [5/6] 断言低版本 Finished-only 非零退出仍采集一次"
 php -d "$ER" -r '
 require "vendor/autoload.php";
 $app = require "bootstrap/app.php";
@@ -77,7 +105,7 @@ if (count($rows) !== 1 || ($data["meta"]["source"] ?? null) !== "schedule_exit")
 '
 echo "    ok：Finished-only 非零退出采集一次"
 
-echo "==> [5/5] 断言 moo:cloud:test 打不可达云端时不 PHP fatal（真跑 retry()/Http）"
+echo "==> [6/6] 断言 moo:cloud:test 打不可达云端时不 PHP fatal（真跑 retry()/Http）"
 OUT="$(MOO_MONITOR_CLOUD_ENABLED=true MOO_MONITOR_CLOUD_TOKEN=moo_smoke \
        MOO_MONITOR_CLOUD_URL=http://127.0.0.1:9 MOO_MONITOR_CLOUD_TIMEOUT=2 \
        php -d "$ER" artisan moo:cloud:test --type=runtimes 2>&1)" || true

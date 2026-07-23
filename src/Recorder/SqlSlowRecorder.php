@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Mooeen\Monitor\Recorder;
 
 use Illuminate\Http\Request;
+use Mooeen\Monitor\StorageScope;
 use Throwable;
 
 /**
@@ -26,7 +27,7 @@ class SqlSlowRecorder extends BucketedYamlRecorder
     {
         $this->config   = $config ?? (array) config('moo-monitor.sql_slow', []);
         $path           = (string) ($this->config['path'] ?? 'moo-monitor/sql-slows');
-        $this->basePath = $basePath ?? RuntimeErrorRecorder::resolveStoragePath($path);
+        $this->basePath = $basePath ?? RuntimeErrorRecorder::resolveStoragePath(StorageScope::scopePath($path));
         $this->masker   = new SensitiveMasker((array) ($this->config['mask_keys'] ?? []));
     }
 

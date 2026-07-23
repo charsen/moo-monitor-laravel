@@ -25,7 +25,7 @@ use Throwable;
  */
 class MonitorProvider extends ServiceProvider
 {
-    public const VERSION = '0.1.12';
+    public const VERSION = '0.1.13';
 
     public static function version(): string
     {
@@ -230,12 +230,25 @@ class MonitorProvider extends ServiceProvider
             $this->app->booted(function () {
                 $cfg = (array) config('moo-monitor.cloud', []);
                 if (($cfg['enabled'] ?? false) && ($cfg['schedule'] ?? true)) {
-                    $this->app->make(\Illuminate\Console\Scheduling\Schedule::class)
-                        ->command('moo:cloud:push')
+                    $parameters  = [];
+                    $environment = StorageScope::selectedCommandEnvironment();
+                    if ($environment !== null) {
+                        $parameters['--env'] = $environment;
+                    }
+
+                    $event = $this->app->make(\Illuminate\Console\Scheduling\Schedule::class)
+                        ->command('moo:cloud:push', $parameters)
                         ->everyMinute()
                         // 显式 10 分钟锁过期：防一次卡死的 run 用默认 24h 锁把后续推送全堵死。
-                        ->withoutOverlapping(10)
-                        ->runInBackground();
+                        ->withoutOverlapping(10);
+
+                    // Laravel 的后台任务由独立 schedule:finish 进程释放 withoutOverlapping 锁，
+                    // 但该进程不会继承父级 schedule:run/work 的 --env。scoped mutex 因而无法命中，
+                    // 只能等 10 分钟过期。带环境选择器时留在原进程前台执行，确保释放同一把锁；
+                    // 普通单环境部署继续沿用后台执行行为。
+                    if ($environment === null) {
+                        $event->runInBackground();
+                    }
                 }
             });
         }

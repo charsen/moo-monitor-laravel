@@ -22,6 +22,7 @@ Laravel 后端监控采集 SDK，用来把项目里的 **运行时异常** 和 *
 | 相同问题聚合 | 相同异常或相同慢 SQL 会按 hash 聚合，累计出现次数，避免同一个问题刷屏。 |
 | 敏感信息脱敏 | 对 password、token、secret、authorization 等常见敏感字段做脱敏处理。 |
 | 本地缓冲 | 数据先写入 `storage/moo-monitor/`，云端或网络异常不会影响业务请求。 |
+| 多环境隔离 | 同一 host 通过 `artisan --env=XXX` 连接多个 Cloud 项目时，自动隔离 YAML、游标、partial ack 与同步锁。 |
 | 云端推送 | 通过 `moo:cloud:push` 增量推送到 moo-scaffold-cloud，云端负责查看、告警和处置。 |
 | AI / MCP 辅助处理 | 可通过 `moo:cloud:mcp` 让 Claude Code / Codex 等工具读取云端 runtime 错误和待办，并回写处理状态。 |
 | 旧版迁移 | 支持从 `moo-scaffold <= 3.8` 的本地监控目录迁移到新目录。 |
@@ -119,6 +120,32 @@ MOO_MONITOR_SQL_SLOW_ENABLED=true
 MOO_MONITOR_SQL_SLOW_THRESHOLD_MS=100
 ```
 
+同一份 Laravel 代码若通过多份 `.env.XXX` 对应多个 Cloud 项目，保持默认配置即可：
+
+```bash
+php artisan moo:cloud:push --env=PROJECT_A
+php artisan moo:cloud:push --env=PROJECT_B
+```
+
+若由 Laravel Scheduler 自动推送，请让每个项目的 scheduler 进程带上对应 `--env`；本包生成的
+`moo:cloud:push` 子命令会继承该值，并为不同环境使用独立的 `withoutOverlapping` 锁。带
+`--env` 的 scoped push 会在 scheduler 原进程前台执行，确保完成后释放同一环境的锁；未指定
+`--env` 的普通单环境任务继续后台执行：
+
+```bash
+php artisan schedule:work --env=PROJECT_A
+php artisan schedule:work --env=PROJECT_B
+```
+
+默认 `MOO_MONITOR_STORAGE_SCOPE=auto` 会在 Artisan environment 与 `APP_ENV` 不同时，使用
+`--project-a` / `--project-b` 后缀隔离 runtime、slow SQL、cursor、partial ack 和同步锁。
+普通 `.env` 单环境运行继续使用原路径，不发生目录变化。也可以显式指定稳定 scope；设为
+`false`、`off` 或 `none` 可关闭自动隔离：
+
+```env
+MOO_MONITOR_STORAGE_SCOPE=project-a
+```
+
 发布配置文件可查看更多选项：
 
 ```bash
@@ -197,6 +224,9 @@ MOO_MONITOR_CLOUD_SCHEDULE=true
 * * * * * cd /path/to/project && php artisan schedule:run >> /dev/null 2>&1
 ```
 
+多 `.env.XXX` 部署请让每个 scheduler 进程显式携带对应 `--env`。这类 scoped push 会前台执行，
+避免 Laravel 的后台 `schedule:finish` 子进程因缺少环境选择器而无法释放环境专属互斥锁。
+
 没有接入 scheduler 时，也可以用自己的定时任务执行：
 
 ```bash
@@ -220,6 +250,7 @@ php artisan moo:cloud:push
 
 | 配置 | 默认值 | 说明 |
 | --- | --- | --- |
+| `MOO_MONITOR_STORAGE_SCOPE` | `auto` | 多 `.env.XXX` 项目的本地状态隔离；可设显式 scope，或设 `false` / `off` / `none` 关闭。 |
 | `MOO_MONITOR_RUNTIME_ENABLED` | `true` | 是否采集运行时异常。 |
 | `MOO_MONITOR_EXCEPTION_LOG_CONTEXT_HOOK` | `true` | 是否捕获错误日志 context 里的 `exception` 对象。 |
 | `MOO_MONITOR_EXCEPTION_LOG_MESSAGE_HOOK` | `true` | 是否捕获 `Log::error($e)` 这类「异常被字符串化、只写日志」的形态。 |
@@ -265,6 +296,20 @@ storage/moo-monitor/
 ```
 
 `cloud-sync.json.acks` 保存已逐条确认但尚未被全局游标覆盖的版本；同步完成后会自动收敛。该目录会自动写入 `.gitignore`，监控数据不会进入宿主项目 git。
+
+多环境 auto scope 启用时，目录和文件会变为同一后缀，例如：
+
+```text
+storage/moo-monitor/
+├── runtimes--project-a/
+├── sql-slows--project-a/
+├── cloud-sync--project-a.json
+└── cloud-sync--project-a.json.acks
+```
+
+新 scope 没有历史游标，首次推送会幂等发送该 scope 当前缓冲中的全部记录；云端按
+`(project, hash)` upsert，不会在同一项目生成重复条目。旧的未加 scope 目录不会被自动搬入任一项目，
+避免无法确认归属的历史混合数据被再次误投。
 
 ## MCP 接入
 

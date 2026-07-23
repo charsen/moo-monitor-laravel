@@ -35,6 +35,9 @@
 - MCP Runtime/Todo 列表以 `offset` 分页，Cloud 返回 `offset / has_more / next_offset`；翻页必须保持相同 `status / limit`。后续页缺少分页回执时 Monitor fail-closed，防止旧 Cloud 忽略 offset 后无限重复第一页。
 - 本包调度的 `moo:cloud:*` 非零退出不得写入 runtime 缓冲；推送中断由 Cloud heartbeat 哨兵负责，否则会形成「push 失败 → 采集 push 失败 → 待推数据增加」自反馈。命令内部真正抛出的 Error / RuntimeException 仍须采集，不能隐藏代码根因。
 - Cloud summary 返回 200 只证明 Token 有 `runtimes`，不证明独立 `mcp` ability；宿主验收要另跑只读 `list_open_runtimes` / `list_open_todos`。若返回「token 无此权限」，应在 Cloud 侧迁移或给安全 Host Token 授 `mcp`，不能复用上报 ability 绕过。
+- 同一 host 用 `artisan --env=XXX` 切换多个 Cloud 项目时，runtime/slow SQL YAML、cursor、partial ack、sync lock、prune 范围和 recorder cache key 必须共用 `StorageScope` 隔离；只隔离 cursor 仍会因同 hash 聚合与回收串项目。
+- 多环境 scheduler 必须把父级 `schedule:run/work --env=XXX` 原样传给自动注册的 `moo:cloud:push`；使用 Schedule 参数数组负责转义，环境值进入 command 后 `withoutOverlapping` mutex 会自然隔离。
+- Laravel 后台调度依赖独立 `schedule:finish` 释放 `withoutOverlapping` 锁，但该子命令不继承父级 `--env`；带环境 scope 的 Cloud push 必须前台执行让原进程解锁，无 `--env` 的单环境任务继续后台执行。
 
 ## 用户偏好
 

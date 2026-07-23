@@ -4,6 +4,7 @@ namespace Mooeen\Monitor\Recorder;
 
 use Illuminate\Http\Request;
 use Mooeen\Monitor\Concerns\SafelyLogs;
+use Mooeen\Monitor\StorageScope;
 use Symfony\Component\Yaml\Yaml;
 use Throwable;
 
@@ -137,7 +138,7 @@ abstract class BucketedYamlRecorder
         try {
             if (function_exists('cache')) {
                 return (int) cache()->remember(
-                    static::CACHE_OPEN_COUNT,
+                    StorageScope::cacheKey(static::CACHE_OPEN_COUNT),
                     $this->openCountCacheTtl(),
                     fn () => $this->countOpen(),
                 );
@@ -290,7 +291,7 @@ abstract class BucketedYamlRecorder
     {
         try {
             if (function_exists('cache')) {
-                cache()->forget(static::CACHE_OPEN_COUNT);
+                cache()->forget(StorageScope::cacheKey(static::CACHE_OPEN_COUNT));
             }
         } catch (Throwable) {
             // ignore:CLI / 未启动 cache 时静默
@@ -469,7 +470,7 @@ abstract class BucketedYamlRecorder
     /** overflow 缓存 key：复用各类型 open_count 缓存前缀（runtime / sql_slow 各自独立）。 */
     private function overflowKey(string $hash): string
     {
-        return str_replace(':open_count', '', static::CACHE_OPEN_COUNT) . ':overflow:' . $hash;
+        return StorageScope::cacheKey(str_replace(':open_count', '', static::CACHE_OPEN_COUNT) . ':overflow:' . $hash);
     }
 
     /** overflow key TTL（秒）到次日凌晨 1 点：当天溢出累积同一 key，次日回填后清；回填前过期只退回偏低。 */

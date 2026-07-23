@@ -8,6 +8,12 @@
  */
 return [
 
+    // ── 本地状态 scope ───────────────────────────────────────────────────
+    // 多项目 host 通过 `php artisan --env=PROJECT_A ...` 运行时，auto 会把当前 Artisan
+    // 环境追加到 runtimes/sql-slows/cursor/ack/lock 路径；普通单环境部署保持旧路径。
+    // 可填任意显式 scope；设为 false/off/none 关闭自动隔离。
+    'storage_scope' => env('MOO_MONITOR_STORAGE_SCOPE', 'auto'),
+
     // ── 运行时异常采集 ───────────────────────────────────────────────────
     'runtime' => [
         'enabled' => env('MOO_MONITOR_RUNTIME_ENABLED', true),
