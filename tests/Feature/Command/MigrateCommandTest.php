@@ -161,3 +161,21 @@ it('重复跑第二次 → 幂等无动作', function () {
         ->expectsOutputToContain('没有发现需要迁移的旧数据')
         ->assertExitCode(0);
 });
+
+it('迁移目标目录与游标遵循当前 storage scope', function () {
+    config(['moo-monitor.storage_scope' => 'project-a']);
+    migrateCmd_seedOld('runtimes', 'open', 'aaaaaaaaaaaa', '2026-06-01T00:00:00+00:00');
+
+    $oldCursorDir = storage_path('app/scaffold');
+    @mkdir($oldCursorDir, 0755, true);
+    file_put_contents($oldCursorDir . '/cloud-sync.json', json_encode([
+        'runtimes' => '2026-06-01T00:00:00+00:00',
+    ]));
+
+    $this->artisan('moo:monitor:migrate')->assertExitCode(0);
+
+    expect(is_file(storage_path('moo-monitor/runtimes--project-a/open/aaaaaaaaaaaa.yaml')))->toBeTrue()
+        ->and(is_file(storage_path('moo-monitor/cloud-sync--project-a.json')))->toBeTrue()
+        ->and(is_file(storage_path('moo-monitor/runtimes/open/aaaaaaaaaaaa.yaml')))->toBeFalse()
+        ->and(is_file(storage_path('moo-monitor/cloud-sync.json')))->toBeFalse();
+});

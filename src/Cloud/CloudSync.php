@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Mooeen\Monitor\Cloud;
 
 use Mooeen\Monitor\Concerns\SafelyLogs;
+use Mooeen\Monitor\StorageScope;
 use Symfony\Component\Yaml\Yaml;
 use Throwable;
 
@@ -45,9 +46,9 @@ class CloudSync
 
     public function __construct(?string $cursorFile = null)
     {
-        $this->cursorFile = $cursorFile
-            ?? (function_exists('storage_path') ? storage_path('moo-monitor/cloud-sync.json') : 'moo-monitor-cloud-sync.json');
-        $this->ackFile = $this->cursorFile . '.acks';
+        $defaultCursor    = function_exists('storage_path') ? storage_path('moo-monitor/cloud-sync.json') : 'moo-monitor-cloud-sync.json';
+        $this->cursorFile = $cursorFile ?? StorageScope::scopeFile($defaultCursor);
+        $this->ackFile    = $this->cursorFile . '.acks';
     }
 
     public function types(): array
@@ -466,7 +467,7 @@ class CloudSync
             return $relative;
         }
 
-        return \Mooeen\Monitor\Recorder\RuntimeErrorRecorder::resolveStoragePath($relative);
+        return \Mooeen\Monitor\Recorder\RuntimeErrorRecorder::resolveStoragePath(StorageScope::scopePath($relative));
     }
 
     /** ISO-8601（可含毫秒）→ 浮点 epoch 秒；解析失败返 0.0。strtotime 会丢毫秒，故走 DateTimeImmutable。 */

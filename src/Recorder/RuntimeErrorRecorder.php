@@ -6,6 +6,7 @@ namespace Mooeen\Monitor\Recorder;
 
 use Illuminate\Http\Request;
 use Mooeen\Monitor\SelfTestException;
+use Mooeen\Monitor\StorageScope;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 use Throwable;
 
@@ -33,7 +34,7 @@ class RuntimeErrorRecorder extends BucketedYamlRecorder
     {
         $this->config   = $config ?? (array) config('moo-monitor.runtime', []);
         $path           = (string) ($this->config['path'] ?? 'moo-monitor/runtimes');
-        $this->basePath = $basePath ?? self::resolveStoragePath($path);
+        $this->basePath = $basePath ?? self::resolveStoragePath(StorageScope::scopePath($path));
         $this->masker   = new SensitiveMasker((array) ($this->config['mask_keys'] ?? []));
     }
 

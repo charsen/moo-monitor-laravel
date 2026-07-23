@@ -2,6 +2,26 @@
 
 `moo-monitor-laravel` 版本变更记录，按 [Keep a Changelog](https://keepachangelog.com/) + [SemVer](https://semver.org/) 风格。
 
+## [0.1.13] — 2026-07-22
+
+修复同一 Laravel Host 通过多份 `.env.XXX` 连接不同 Cloud 项目时，本地缓冲、同步水位与自动调度可能跨项目串用的问题。
+
+### Added
+
+- **统一 Storage Scope**：新增 `MOO_MONITOR_STORAGE_SCOPE`（默认 `auto`），在真实使用 `artisan --env=XXX` 且所选环境不同于 `APP_ENV` 时，为 runtime、slow SQL、cursor、partial ack、同步锁、回收范围和 recorder cache key 使用同一规范化 scope。
+- **多环境迁移与文档**：旧版数据迁移目标遵循当前 scope；README 补齐单环境兼容、显式 scope、关闭 auto scope 和多 scheduler 进程用法。
+
+### Fixed
+
+- **多项目本地数据隔离**：相同 hash 不再跨项目聚合；项目 A 的 cursor / partial ack 不再抑制或误确认项目 B 的记录，`--all` 与本地回收也不会越过当前 scope。
+- **自动调度继承环境与可靠解锁**：父级 `schedule:run/work --env=XXX` 注册的 `moo:cloud:push` 子命令会原样携带 `--env`；参数由 Laravel Schedule 转义，不同环境的 `withoutOverlapping` mutex 自然独立。scoped push 留在原 scheduler 进程前台执行，避免后台 `schedule:finish` 因不继承 `--env` 而找不到环境专属锁；未指定 `--env` 的单环境部署继续后台执行并保持历史路径。
+
+### Verified
+
+- `composer quality`：213 passed / 767 assertions。
+- `composer smoke:lower`：Laravel Framework 8.83.29 安装、provider boot、命令注册、scoped scheduler、调度失败采集与真实 HTTP 重试路径通过。
+- 真实多环境宿主完成六份 `.env.XXX` 的 Runtime / Slow SQL 推送、55 条分页与分批压力、逐条回执、Todo 状态流转、MCP 权限和跨项目隔离回归；重复推送均收敛为 0 条变化。
+
 ## [0.1.12] — 2026-07-22
 
 加固 Cloud 增量确认、MCP 读写契约与跨 Laravel 版本的调度失败采集，解决单条失败拖累整批、历史记录重复上报和监控命令自反馈问题。
