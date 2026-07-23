@@ -34,6 +34,7 @@
 - Cloud Token 的 MCP 读写面使用独立 `mcp` ability；`runtimes` / `slow_queries` 只授权上报，Chrome 扩展的 `todos` 只授权待办 intake，三者不能互相替代。
 - MCP Runtime/Todo 列表以 `offset` 分页，Cloud 返回 `offset / has_more / next_offset`；翻页必须保持相同 `status / limit`。后续页缺少分页回执时 Monitor fail-closed，防止旧 Cloud 忽略 offset 后无限重复第一页。
 - 本包调度的 `moo:cloud:*` 非零退出不得写入 runtime 缓冲；推送中断由 Cloud heartbeat 哨兵负责，否则会形成「push 失败 → 采集 push 失败 → 待推数据增加」自反馈。命令内部真正抛出的 Error / RuntimeException 仍须采集，不能隐藏代码根因。
+- Cloud summary 返回 200 只证明 Token 有 `runtimes`，不证明独立 `mcp` ability；宿主验收要另跑只读 `list_open_runtimes` / `list_open_todos`。若返回「token 无此权限」，应在 Cloud 侧迁移或给安全 Host Token 授 `mcp`，不能复用上报 ability 绕过。
 
 ## 用户偏好
 
