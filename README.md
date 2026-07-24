@@ -323,6 +323,13 @@ claude mcp add moo-cloud -- php artisan moo:cloud:mcp
 
 MCP 复用 `.env` 中的 `MOO_MONITOR_CLOUD_URL` 和 `MOO_MONITOR_CLOUD_TOKEN`，不需要额外 token，但该 Token 必须包含 `mcp` 能力。只有 `runtimes` / `slow_queries` 上报能力的 Token 无权读取或处置云端问题。
 
+与 `--env` 隔离的 push 不同，`moo:cloud:mcp` 服务器本身不按 `--env` 切换项目：它只绑定所加载 `.env` 中那一个 `MOO_MONITOR_CLOUD_TOKEN`，即单个 Cloud 项目。因此多 `.env.XXX` 部署要按项目分别注册，各自带上对应 `--env`：
+
+```bash
+claude mcp add moo-cloud-a -- php artisan moo:cloud:mcp --env=PROJECT_A
+claude mcp add moo-cloud-b -- php artisan moo:cloud:mcp --env=PROJECT_B
+```
+
 `list_open_runtimes` 和 `list_open_todos` 每次最多返回 50 条。响应提示 `has_more=true` 时，下一次调用保持相同的 `status` 与 `limit`，并把提示中的 `next_offset` 作为 `offset` 传入；直到提示“已到末页”。若后续页调用遇到旧 Cloud 未返回分页元数据，工具会直接报错，避免重复读取第一页。
 
 待办分四类：`bug`（待分类缺陷）、`frontend_bug`（前端缺陷）、`backend_bug`（后端缺陷）和 `task`（普通任务）。`list_open_todos` / `get_todo` 返回的「类型」字段会标明，便于 AI 选择正确代码范围并区分「修缺陷」和「做任务」。
