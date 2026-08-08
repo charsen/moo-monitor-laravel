@@ -1,9 +1,9 @@
 # notes.md — 模型工作记忆（每次开工先读；一条一行，新条目追加在对应分组末尾）
 
-## 当前状态
+## 历史调优入口
 
-- 2026-07-09：调优方案定稿于 docs/plans/02-code-tuning.md（修订二，捕获精准度优先）；P1-7 三项决议已拍板，无待决问题；方案文档尚未提交 git。
-- master 现有红灯：tests/Feature/HostSafety/NeverThrowsIntoHostTest.php:96 匿名类签名落后于 record() 新签名致 Fatal；tests/Feature/Command/CloudMcpCommandTest.php 有 Pint 违规 —— 方案 P0 先修，修好前 composer quality 必红。
+- 2026-07-09 的调优方案归档于 `docs/plans/02-code-tuning.md`（修订二，捕获精准度优先）；P1-7 三项决议当时已拍板。
+- 本节原有的“尚未提交”和测试红灯属于当时快照，不代表现况；当前事实以 AGENTS.md、git 和实际验证结果为准。
 
 ## 已验证的框架事实（都在 vendor/laravel/framework 里核实过，勿凭记忆推翻）
 
