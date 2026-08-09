@@ -6,7 +6,7 @@
 
 1. 先完整阅读 `notes.md`，其中包含已在 Laravel 源码和生产形态验证的捕获边界、兼容限制与刻意不做事项。
 2. 再读 `README.md`、`docs/cloud-api-contract.md`、相关 plan、源码和测试。改采集钩子时同时查对应 Laravel 版本的真实事件/异常链。
-3. 修改前读完目标文件和直接调用链，先列计划并获用户批准；捕获范围、host 副作用、Cloud 数据语义或兼容面变化时重新确认。
+3. 修改前读完目标文件和直接调用链。机械性、零语义且范围明确的小修可直接实施；非琐碎或涉及捕获范围、host 副作用、Cloud 数据语义、兼容面的改动先列计划并获用户批准，范围或风险实质变化时重新确认。
 
 - `notes.md` 是分组维护的长期记忆，只记录已验证且跨任务可复用的框架事实、项目约束、事故教训和用户决策。
 - 新条目追加到对应分组；结论失效时修订原条目并说明证据，不追加相反说法。任务进度、猜测和可从现码直接读出的普通事实不进入 notes。
@@ -50,7 +50,7 @@
 ## 验证与交付
 
 - 文档-only 至少运行 `git diff --check`，并核对 README、config 和 Cloud 契约的同款描述。
-- 代码改动先跑目标 Pest，再执行 `composer format` 与 `composer test`；提交候选用 `composer quality`。格式命令会写文件，运行后必须复核 diff。
+- 代码改动开发中按需先跑目标 Pest；最终代码状态执行一次 `composer quality`，它已聚合 Composer 校验、lint 和测试，不再重复运行 `composer test`，失败诊断时才拆分。需要格式化时用 Pint 显式处理本任务文件并复核 diff，不对全部脏文件运行写入式 `composer format`。
 - 改 Laravel 兼容面时追加低版本安装/启动冒烟，不能只凭 Testbench 10 宣称 Laravel 8～12 全部通过。
 - 改 Cloud/MCP/partial ack 时用双方同一 fixture 验证；改 scheduler 或多环境 scope 时至少覆盖单环境、多 `--env`、锁竞争和失败恢复。
 - 不主动 commit、push、bump、tag 或发布。提交前展示完整 diff 与真实验证结果并取得用户明确确认；无法验证的 host/Cloud/低版本面必须单列风险。
