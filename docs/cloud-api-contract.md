@@ -76,6 +76,22 @@ the request without advancing the cursor.
 
 Body and response match the runtime intake endpoint.
 
+## Local Development Noise
+
+`POST /api/v1/runtimes/discard-local`（ability：`runtimes`）和
+`POST /api/v1/slow-queries/discard-local`（ability：`slow_queries`）只接受：
+
+```json
+{ "token": "moo_xxx", "env": "local" }
+```
+
+成功返回 `{ "ok": true, "deleted": 12 }`。Cloud 只把当前项目 `env=local`
+且状态为 `open / in_progress` 的对应记录移入「已删除」；`resolved`、其它环境和其它项目不动。
+同 hash 后续再次真实发生并经 intake 上报时，沿用现有机制重新打开。
+
+Monitor 在 Cloud 回执成功后，仅丢弃当前 scope 中按 cursor / partial ack 判定的 pending YAML；
+已同步 open 聚合锚点与 cursor 保持不动。
+
 ## Status
 
 ### Summary

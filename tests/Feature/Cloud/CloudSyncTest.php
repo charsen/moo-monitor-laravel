@@ -135,6 +135,105 @@ it('同类型已有同步在执行时明确跳过，不发送请求也不改状�
     Http::assertNothingSent();
 });
 
+it('discardLocalNoise 先清 Cloud 未解决项，再只丢弃本地 pending，保留已同步 open / deleted / cursor', function () {
+    Http::fake([
+        'cloud.test/' . CloudClient::PATH_RUNTIMES_DISCARD_LOCAL     => Http::response(['ok' => true, 'deleted' => 5]),
+        'cloud.test/' . CloudClient::PATH_SLOW_QUERIES_DISCARD_LOCAL => Http::response(['ok' => true, 'deleted' => 3]),
+    ]);
+    config(['cache.default' => 'array']);
+
+    $cursor      = now();
+    $cursorState = [
+        'runtimes' => $cursor->toIso8601String(),
+        'slow_sql' => $cursor->toIso8601String(),
+    ];
+    file_put_contents($this->cursor, json_encode($cursorState));
+
+    cloudSync_writeRecord('open', 'aaaaaaaaaaaa', $cursor->copy()->subMinute()->toIso8601String()); // 已同步
+    cloudSync_writeRecord('open', 'bbbbbbbbbbbb', $cursor->copy()->addMinute()->toIso8601String()); // pending
+    cloudSync_writeRecord('resolved', 'cccccccccccc', $cursor->copy()->addMinutes(2)->toIso8601String(), 'resolved'); // pending
+    cloudSync_writeRecord('deleted', 'dddddddddddd', $cursor->copy()->addMinutes(3)->toIso8601String(), 'deleted');
+    cloudSync_writeRecord('open', 'eeeeeeeeeeee', $cursor->copy()->addMinutes(4)->toIso8601String()); // partial ack
+
+    $slowBase = storage_path('moo-monitor/sql-slows');
+    @mkdir($slowBase . '/open', 0755, true);
+    file_put_contents($slowBase . '/open/111111111111.yaml', "hash: 111111111111\nstatus: open\nlast_seen: '" . $cursor->copy()->subMinute()->toIso8601String() . "'\n");
+    file_put_contents($slowBase . '/open/222222222222.yaml', "hash: 222222222222\nstatus: open\nlast_seen: '" . $cursor->copy()->addMinute()->toIso8601String() . "'\n");
+
+    file_put_contents($this->cursor . '.acks', json_encode([
+        'runtimes' => ['eeeeeeeeeeee' => $cursor->copy()->addMinutes(4)->toIso8601String()],
+    ]));
+    cache()->put(RuntimeErrorRecorder::CACHE_OPEN_COUNT, 99, 60);
+    cache()->put('moo-monitor:runtime:overflow:bbbbbbbbbbbb', 9, 60);
+    cache()->put(SqlSlowRecorder::CACHE_OPEN_COUNT, 88, 60);
+
+    $sync     = new CloudSync($this->cursor);
+    $runtimes = $sync->discardLocalNoise('runtimes');
+    $slowSql  = $sync->discardLocalNoise('slow_sql');
+
+    $runtimeBase = storage_path('moo-monitor/runtimes');
+    $acks        = json_decode((string) file_get_contents($this->cursor . '.acks'), true);
+    expect($runtimes['ok'])->toBeTrue()->and($runtimes['cloud_deleted'])->toBe(5)->and($runtimes['local_discarded'])->toBe(2)
+        ->and($slowSql['ok'])->toBeTrue()->and($slowSql['cloud_deleted'])->toBe(3)->and($slowSql['local_discarded'])->toBe(1)
+        ->and(is_file($runtimeBase . '/open/aaaaaaaaaaaa.yaml'))->toBeTrue()
+        ->and(is_file($runtimeBase . '/open/bbbbbbbbbbbb.yaml'))->toBeFalse()
+        ->and(is_file($runtimeBase . '/resolved/cccccccccccc.yaml'))->toBeFalse()
+        ->and(is_file($runtimeBase . '/deleted/dddddddddddd.yaml'))->toBeTrue()
+        ->and(is_file($runtimeBase . '/open/eeeeeeeeeeee.yaml'))->toBeTrue()
+        ->and(is_file($slowBase . '/open/111111111111.yaml'))->toBeTrue()
+        ->and(is_file($slowBase . '/open/222222222222.yaml'))->toBeFalse()
+        ->and(json_decode((string) file_get_contents($this->cursor), true))->toBe($cursorState)
+        ->and($acks['runtimes'])->toHaveKey('eeeeeeeeeeee')
+        ->and(cache()->has(RuntimeErrorRecorder::CACHE_OPEN_COUNT))->toBeFalse()
+        ->and(cache()->has('moo-monitor:runtime:overflow:bbbbbbbbbbbb'))->toBeFalse()
+        ->and(cache()->has(SqlSlowRecorder::CACHE_OPEN_COUNT))->toBeFalse();
+    Http::assertSent(fn ($request) => $request->url() === 'https://cloud.test/' . CloudClient::PATH_RUNTIMES_DISCARD_LOCAL
+        && $request['env']                            === 'local');
+    Http::assertSent(fn ($request) => $request->url() === 'https://cloud.test/' . CloudClient::PATH_SLOW_QUERIES_DISCARD_LOCAL
+        && $request['env']                            === 'local');
+});
+
+it('discardLocalNoise 遇同类型推送锁时跳过且不请求 Cloud、不删文件', function () {
+    Http::fake();
+    $hash = cloudSync_seedRuntime('locked local noise');
+    $lock = fopen($this->cursor . '.runtimes.sync.lock', 'c');
+    expect($lock)->not->toBeFalse();
+    flock($lock, LOCK_EX);
+
+    try {
+        $r = (new CloudSync($this->cursor))->discardLocalNoise('runtimes');
+    } finally {
+        flock($lock, LOCK_UN);
+        fclose($lock);
+    }
+
+    expect($r['skipped'])->toBeTrue()
+        ->and($r['reason'])->toContain('同类型推送正在执行')
+        ->and($r['local_discarded'])->toBe(0)
+        ->and(is_file(storage_path('moo-monitor/runtimes/open/' . $hash . '.yaml')))->toBeTrue();
+    Http::assertNothingSent();
+});
+
+it('discardLocalNoise 的 Cloud 清理失败时保留本地 pending', function () {
+    Http::fake(['*' => Http::response(['ok' => false, 'error' => 'upstream failed'], 500)]);
+    $hash = cloudSync_seedRuntime('keep when cloud fails');
+
+    $r = (new CloudSync($this->cursor))->discardLocalNoise('runtimes');
+
+    expect($r['ok'])->toBeFalse()
+        ->and($r['error'])->toContain('Cloud 清理失败')
+        ->and($r['local_discarded'])->toBe(0)
+        ->and(is_file(storage_path('moo-monitor/runtimes/open/' . $hash . '.yaml')))->toBeTrue();
+});
+
+it('discardLocalNoise 拒绝未知类型', function () {
+    $r = (new CloudSync($this->cursor))->discardLocalNoise('unknown');
+
+    expect($r['ok'])->toBeFalse()
+        ->and($r['error'])->toContain('未知类型')
+        ->and($r['local_discarded'])->toBe(0);
+});
+
 it('过滤记录也算已确认：推进游标且下一轮不重发', function () {
     cloudSync_seedRuntime('saved runtime');
     cloudSync_seedRuntime('filtered runtime');

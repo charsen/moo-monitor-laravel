@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Mooeen\Monitor\Cloud;
 
 use Mooeen\Monitor\Concerns\SafelyLogs;
+use Mooeen\Monitor\Recorder\RuntimeErrorRecorder;
+use Mooeen\Monitor\Recorder\SqlSlowRecorder;
 use Mooeen\Monitor\StorageScope;
 use Symfony\Component\Yaml\Yaml;
 use Throwable;
@@ -26,17 +28,21 @@ class CloudSync
 {
     use SafelyLogs;
 
-    /** @var array<string,array{path:string,endpoint:string,push_key:string}> */
+    /** @var array<string,array{path:string,endpoint:string,discard_endpoint:string,push_key:string,recorder:class-string}> */
     private const TYPES = [
         'runtimes' => [
-            'path'     => 'moo-monitor.runtime.path',
-            'endpoint' => CloudClient::PATH_RUNTIMES,
-            'push_key' => 'runtimes',
+            'path'             => 'moo-monitor.runtime.path',
+            'endpoint'         => CloudClient::PATH_RUNTIMES,
+            'discard_endpoint' => CloudClient::PATH_RUNTIMES_DISCARD_LOCAL,
+            'push_key'         => 'runtimes',
+            'recorder'         => RuntimeErrorRecorder::class,
         ],
         'slow_sql' => [
-            'path'     => 'moo-monitor.sql_slow.path',
-            'endpoint' => CloudClient::PATH_SLOW_QUERIES,
-            'push_key' => 'slow_sql',
+            'path'             => 'moo-monitor.sql_slow.path',
+            'endpoint'         => CloudClient::PATH_SLOW_QUERIES,
+            'discard_endpoint' => CloudClient::PATH_SLOW_QUERIES_DISCARD_LOCAL,
+            'push_key'         => 'slow_sql',
+            'recorder'         => SqlSlowRecorder::class,
         ],
     ];
 
@@ -65,6 +71,75 @@ class CloudSync
     public function cursors(): array
     {
         return $this->readState();
+    }
+
+    /**
+     * 清理 local 开发噪音：Cloud 软删未解决项，本地只丢弃 cursor / ack 判定的 pending。
+     *
+     * 已同步 open 聚合锚点、已同步游标、Cloud resolved、其它环境和本地 deleted / cloud-rejected 均不动。
+     * 与 sync() 共用分类型非阻塞锁，避免清理与同类型推送同时读写；Recorder 热路径仍保持无锁。
+     *
+     * @return array{type:string,skipped:bool,reason:?string,cloud_deleted:int,local_discarded:int,failed:int,ok:bool,error:?string}
+     */
+    public function discardLocalNoise(string $type): array
+    {
+        $base = self::TYPES[$type] ?? null;
+        if ($base === null) {
+            return $this->discardNoiseResult($type, ok: false, error: "未知类型：{$type}");
+        }
+
+        $cfg = (array) config('moo-monitor.cloud', []);
+        if (! ($cfg['enabled'] ?? false)) {
+            return $this->discardNoiseResult($type, skipped: true, reason: 'cloud 未启用 (MOO_MONITOR_CLOUD_ENABLED=false)');
+        }
+        $client = new CloudClient($cfg);
+        if (! $client->configured()) {
+            return $this->discardNoiseResult($type, ok: false, error: 'cloud base_url / token 未配置');
+        }
+
+        $lockDir = dirname($this->cursorFile);
+        if (! is_dir($lockDir)) {
+            @mkdir($lockDir, 0755, true);
+        }
+        if (! is_dir($lockDir)) {
+            return $this->discardNoiseResult($type, ok: false, error: '无法创建 cloud 同步状态目录');
+        }
+        $gitignore = $lockDir . '/.gitignore';
+        if (! is_file($gitignore)) {
+            @file_put_contents($gitignore, "*\n");
+        }
+        $lock = @fopen($this->cursorFile . '.' . $type . '.sync.lock', 'c');
+        if ($lock === false) {
+            return $this->discardNoiseResult($type, ok: false, error: '无法创建 cloud 同步锁');
+        }
+        $wouldBlock = 0;
+        if (! @flock($lock, LOCK_EX | LOCK_NB, $wouldBlock)) {
+            @fclose($lock);
+
+            return $wouldBlock === 1
+                ? $this->discardNoiseResult($type, skipped: true, reason: "{$type} 同类型推送正在执行")
+                : $this->discardNoiseResult($type, ok: false, error: '无法获取 cloud 同步锁');
+        }
+
+        try {
+            $cloud = $client->discardLocalNoise($base['discard_endpoint']);
+            if (! $cloud['ok']) {
+                return $this->discardNoiseResult($type, ok: false, error: 'Cloud 清理失败：' . $cloud['error']);
+            }
+
+            $basePath = $this->resolvePath((string) config($base['path'], ''));
+            $local    = $this->discardPendingRecords($type, $basePath);
+            $recorder = $base['recorder'];
+            $recorder::forgetLocalBufferCaches($local['hashes']);
+            $this->retainLiveAcknowledgements($type, $basePath);
+
+            return $local['failed'] > 0
+                ? $this->discardNoiseResult($type, cloudDeleted: $cloud['deleted'], localDiscarded: $local['discarded'], failed: $local['failed'], ok: false, error: "{$local['failed']} 条本地 pending 删除失败")
+                : $this->discardNoiseResult($type, cloudDeleted: $cloud['deleted'], localDiscarded: $local['discarded']);
+        } finally {
+            @flock($lock, LOCK_UN);
+            @fclose($lock);
+        }
     }
 
     /**
@@ -583,6 +658,89 @@ class CloudSync
         }
     }
 
+    /** 只保留仍存在于 open / resolved 桶的确认水位，避免清理后留下幽灵 ack。 */
+    private function retainLiveAcknowledgements(string $type, string $basePath): void
+    {
+        if (! is_file($this->ackFile)) {
+            return;
+        }
+
+        $acks = $this->readAckState()[$type] ?? [];
+        $acks = is_array($acks) ? $acks : [];
+        $live = [];
+        foreach (['open', 'resolved'] as $bucket) {
+            foreach (glob($basePath . '/' . $bucket . '/*.yaml') ?: [] as $file) {
+                $hash = basename($file, '.yaml');
+                if (preg_match('/^[a-f0-9]{12}$/', $hash) === 1) {
+                    $live[$hash] = true;
+                }
+            }
+        }
+        $this->writeAckState($type, array_intersect_key($acks, $live));
+    }
+
+    /**
+     * @return array{discarded:int,failed:int,hashes:array<int,string>}
+     */
+    private function discardPendingRecords(string $type, string $basePath): array
+    {
+        $cursor      = $this->readState()[$type] ?? null;
+        $cursorEpoch = $cursor ? $this->epochFloat((string) $cursor) : 0.0;
+        $acks        = $this->readAckState()[$type] ?? [];
+        $acks        = is_array($acks) ? $acks : [];
+        $pending     = [];
+
+        foreach ($this->readRecords($basePath)['records'] as $rec) {
+            $hash  = (string) ($rec['hash'] ?? '');
+            $ts    = $this->recordTimestamp($rec);
+            $epoch = $ts !== '' ? $this->epochFloat($ts) : 0.0;
+            if ($cursor !== null && $epoch !== 0.0 && $epoch <= $cursorEpoch) {
+                continue;
+            }
+            if ($hash !== '' && $this->isAcknowledged($ts, $acks[$hash] ?? null)) {
+                continue;
+            }
+            $pending[] = $rec;
+        }
+
+        $discarded = 0;
+        $failed    = 0;
+        $hashes    = [];
+        foreach ($pending as $rec) {
+            $result = $this->discardRecordIfUnchanged($basePath, $rec);
+            if ($result > 0) {
+                $discarded++;
+                $hashes[] = (string) $rec['hash'];
+            } elseif ($result < 0) {
+                $failed++;
+            }
+        }
+
+        return compact('discarded', 'failed', 'hashes');
+    }
+
+    /** 1=已删；0=并发下已不存在；-1=文件更新或删除失败。 */
+    private function discardRecordIfUnchanged(string $basePath, array $rec): int
+    {
+        $hash = (string) ($rec['hash'] ?? '');
+        if ($hash === '') {
+            return -1;
+        }
+        foreach (['open', 'resolved'] as $bucket) {
+            $file = $basePath . '/' . $bucket . '/' . $hash . '.yaml';
+            if (! is_file($file)) {
+                continue;
+            }
+            if (! $this->fileMatchesSnapshot($file, $this->recordTimestamp($rec))) {
+                return -1;
+            }
+
+            return @unlink($file) ? 1 : -1;
+        }
+
+        return 0;
+    }
+
     /**
      * 取一批记录的 hash 列表（失败批定位用）。
      *
@@ -620,5 +778,28 @@ class CloudSync
     ): array {
         return compact('type', 'skipped', 'reason', 'scanned', 'changed', 'pushed', 'rejected', 'batches', 'ok', 'error')
             + ['failed_hashes' => $failedHashes, 'rejected_hashes' => $rejectedHashes];
+    }
+
+    /** @return array{type:string,skipped:bool,reason:?string,cloud_deleted:int,local_discarded:int,failed:int,ok:bool,error:?string} */
+    private function discardNoiseResult(
+        string $type,
+        bool $skipped = false,
+        ?string $reason = null,
+        int $cloudDeleted = 0,
+        int $localDiscarded = 0,
+        int $failed = 0,
+        bool $ok = true,
+        ?string $error = null,
+    ): array {
+        return [
+            'type'            => $type,
+            'skipped'         => $skipped,
+            'reason'          => $reason,
+            'cloud_deleted'   => $cloudDeleted,
+            'local_discarded' => $localDiscarded,
+            'failed'          => $failed,
+            'ok'              => $ok,
+            'error'           => $error,
+        ];
     }
 }

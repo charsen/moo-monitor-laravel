@@ -193,11 +193,35 @@ abstract class BucketedYamlRecorder
         return $this->find($hash);
     }
 
-    // 云端化（plan-33）后：处置（resolve/reopen/软删/恢复/purge）与清理（prune）统一在 S-Cloud 做，本地
-    // 查看器 + moo:runtime:prune 均已退役 —— 原 resolve()/reopen()/delete()/restoreDeleted()/purge()/
+    /**
+     * 本地缓冲被显式丢弃后，清理 open 数与对应 hash 的 daily overflow 缓存。
+     *
+     * @param array<int,string> $hashes
+     */
+    public static function forgetLocalBufferCaches(array $hashes): void
+    {
+        try {
+            if (! function_exists('cache')) {
+                return;
+            }
+
+            cache()->forget(StorageScope::cacheKey(static::CACHE_OPEN_COUNT));
+            $prefix = str_replace(':open_count', '', static::CACHE_OPEN_COUNT) . ':overflow:';
+            foreach (array_unique($hashes) as $hash) {
+                if (preg_match('/^[a-f0-9]{12}$/', $hash) === 1) {
+                    cache()->forget(StorageScope::cacheKey($prefix . $hash));
+                }
+            }
+        } catch (Throwable) {
+            // cache 不可用不应阻止本地缓冲丢弃
+        }
+    }
+
+    // 云端化（plan-33）后：处置（resolve/reopen/软删/恢复/purge）统一在 S-Cloud 做，本地查看器 +
+    // moo:runtime:prune 均已退役 —— 原 resolve()/reopen()/delete()/restoreDeleted()/purge()/
     // purgeStatus()/pruneOlderThan()/pruneKeepLatest() 全无调用者，已删（死代码）。本地仅采集进 open/，经
-    // moo:cloud:push 上云后由 CloudSync::pruneLocal 回收；moveFile(resolved→open) 仍保留作复发自动重开。
-    // 留存的读 API:count()（顶栏/缓冲页）、get()/list()（读单条/列表，测试 + 内部用）。
+    // moo:cloud:push 上云后由 CloudSync::pruneLocal 回收；local 开发噪音的 pending 可由
+    // CloudSync::discardLocalNoise 显式丢弃。moveFile(resolved→open) 仍保留作复发自动重开。
 
     protected function ensureDir(): void
     {
