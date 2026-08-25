@@ -26,6 +26,10 @@ class CloudClient
 
     public const PATH_SLOW_QUERIES = 'api/v1/slow-queries/intake';
 
+    public const PATH_RUNTIMES_DISCARD_LOCAL = 'api/v1/runtimes/discard-local';
+
+    public const PATH_SLOW_QUERIES_DISCARD_LOCAL = 'api/v1/slow-queries/discard-local';
+
     public const PATH_SUMMARY = 'api/v1/summary';
 
     public const PATH_HEARTBEAT = 'api/v1/heartbeat';
@@ -124,6 +128,41 @@ class CloudClient
             ];
         } catch (Throwable $e) {
             return ['ok' => false, 'status' => 0, 'saved' => 0, 'filtered' => 0, 'skipped' => 0, 'results' => [], 'error' => $e->getMessage()];
+        }
+    }
+
+    /**
+     * 把 Cloud 当前项目 env=local 的未解决记录移入「已删除」。失败不抛，供 local Scaffold 显式触发。
+     *
+     * @return array{ok:bool,status:int,deleted:int,error:?string}
+     */
+    public function discardLocalNoise(string $path): array
+    {
+        if (! $this->configured()) {
+            return ['ok' => false, 'status' => 0, 'deleted' => 0, 'error' => 'cloud base_url / token 未配置'];
+        }
+
+        $url = $this->baseUrl . '/' . ltrim($path, '/');
+
+        try {
+            $resp = retry(2, fn () => Http::timeout($this->timeout)
+                ->withOptions(['verify' => $this->verify])
+                ->acceptJson()
+                ->asJson()
+                ->post($url, ['token' => $this->token, 'env' => 'local']), 100);
+
+            $body    = (array) ($resp->json() ?? []);
+            $deleted = is_int($body['deleted'] ?? null) ? $body['deleted'] : -1;
+            $ok      = $resp->successful() && ($body['ok'] ?? false) === true && $deleted >= 0;
+
+            return [
+                'ok'      => $ok,
+                'status'  => $resp->status(),
+                'deleted' => max(0, $deleted),
+                'error'   => $ok ? null : (string) ($body['error'] ?? ($resp->successful() ? 'Cloud 清理回执无效' : 'HTTP ' . $resp->status())),
+            ];
+        } catch (Throwable $e) {
+            return ['ok' => false, 'status' => 0, 'deleted' => 0, 'error' => $e->getMessage()];
         }
     }
 
