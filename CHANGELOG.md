@@ -2,6 +2,23 @@
 
 `moo-monitor-laravel` 版本变更记录，按 [Keep a Changelog](https://keepachangelog.com/) + [SemVer](https://semver.org/) 风格。
 
+## [0.1.14] — 2026-08-26
+
+为本地开发环境补充一次性噪音清理契约，同时保持 Cloud 已解决记录与本地已同步聚合锚点不受影响。
+
+### Added
+
+- **local 开发噪音清理**：新增 `CloudSync::discardLocalNoise()`，分别调用 Runtime / Slow Query 的 `discard-local` Cloud 端点。Cloud 只处理当前项目 `env=local` 的 `open / in_progress`，`resolved`、其它环境和其它项目保持不动；同 hash 后续真实复发仍可重新打开。
+- **本地 pending 精确丢弃**：Cloud 回执成功后，仅删除当前 Storage Scope 中由 cursor / partial ack 判定的待推 YAML；已同步 open 聚合锚点、cursor、deleted 与 cloud-rejected 保留。清理与推送共用分类型锁，并同步失效 recorder 计数与 overflow cache。
+
+### Docs
+
+- 补充多 `.env.XXX` 项目分别以 `--env` 注册 `moo:cloud:mcp` 的用法，明确单个 MCP server 只绑定当前环境加载的 Cloud Token。
+
+### Verified
+
+- `composer quality`：217 passed / 803 assertions。
+
 ## [0.1.13] — 2026-07-22
 
 修复同一 Laravel Host 通过多份 `.env.XXX` 连接不同 Cloud 项目时，本地缓冲、同步水位与自动调度可能跨项目串用的问题。
