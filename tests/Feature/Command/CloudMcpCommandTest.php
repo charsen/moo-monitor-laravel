@@ -16,6 +16,8 @@ class CloudMcpCommandFakeCloudClient extends CloudClient
 
     public int $fetchTodoCalls = 0;
 
+    public int $fetchTodoImageCalls = 0;
+
     public int $updateTodoStatusCalls = 0;
 
     public ?bool $lastWithPayload = null;
@@ -93,14 +95,14 @@ class CloudMcpCommandFakeCloudClient extends CloudClient
     public function fetchTodo(string $id): array
     {
         $this->fetchTodoCalls++;
-        $todo = [
-            'id'       => $id,
-            'status'   => 'open',
-            'priority' => 'high',
-            'markdown' => "todo {$id}",
-        ];
+        $fixture          = json_decode((string) file_get_contents(dirname(__DIR__, 2) . '/Fixtures/mcp-todo-detail-response.json'), true);
+        $todo             = $fixture['todo'];
+        $todo['id']       = $id;
+        $todo['markdown'] = "todo {$id}";
         if (! $this->omitCategory) {
             $todo['category'] = $this->todoCategory;
+        } else {
+            unset($todo['category']);
         }
 
         return [
@@ -108,6 +110,26 @@ class CloudMcpCommandFakeCloudClient extends CloudClient
             'status' => 200,
             'data'   => ['todo' => $todo],
             'error'  => null,
+        ];
+    }
+
+    public function fetchTodoImage(string $id, string $attachmentId): array
+    {
+        $this->fetchTodoImageCalls++;
+
+        return [
+            'ok'     => true,
+            'status' => 200,
+            'data'   => ['image' => [
+                'id'         => $attachmentId,
+                'todo_id'    => $id,
+                'mime_type'  => 'image/png',
+                'size_bytes' => 1,
+                'width'      => 1,
+                'height'     => 1,
+                'data'       => base64_encode('x'),
+            ]],
+            'error' => null,
         ];
     }
 
@@ -183,6 +205,7 @@ it('get_runtime 合法 hash 仍正常调用云端,with_payload 字符串按布�
     $res = cloudMcpInvoke('callGetRuntime', ['hash' => 'abcdef123456', 'with_payload' => 'false'], $cloud);
 
     expect($res['isError'])->toBeFalse()
+        ->and($res['structuredContent']['runtime']['hash'])->toBe('abcdef123456')
         ->and($cloud->fetchRuntimeCalls)->toBe(1)
         ->and($cloud->lastWithPayload)->toBeFalse();
 });
@@ -295,6 +318,52 @@ it('get_todo 与 update_todo_status 拒绝非法 id,不打云端', function () {
         ->and($cloud->updateTodoStatusCalls)->toBe(0);
 });
 
+it('get_todo 默认保留定位信息但隐藏网络 headers/body,显式开启后才返回', function () {
+    $cloud = new CloudMcpCommandFakeCloudClient;
+
+    $safe = cloudMcpInvoke('callGetTodo', ['id' => '01ky1521knanpadjkys0s7wzkr'], $cloud);
+    $full = cloudMcpInvoke('callGetTodo', [
+        'id' => '01ky1521knanpadjkys0s7wzkr', 'with_network_payloads' => true,
+    ], $cloud);
+
+    expect($safe['structuredContent']['todo']['page_url'])->toBe('https://app.test/orders/1')
+        ->and($safe['structuredContent']['todo']['context_requests'][0])->toHaveKeys(['method', 'url', 'status', 'duration'])
+        ->and($safe['structuredContent']['todo']['context_requests'][0])->not->toHaveKey('requestBody')
+        ->and($safe['structuredContent']['todo']['context_errors'][0]['stack'])->toContain('app.js:10:2')
+        ->and($safe['structuredContent']['todo']['attachments'][0]['ai_readable'])->toBeTrue()
+        ->and($safe['structuredContent']['todo']['network_payloads_included'])->toBeFalse()
+        ->and($full['structuredContent']['todo']['context_requests'][0]['requestBody'])->toBe('{"id":1}')
+        ->and($full['structuredContent']['todo']['context_requests'][0]['responseBody'])->toContain('boom')
+        ->and($full['structuredContent']['todo']['network_payloads_included'])->toBeTrue();
+});
+
+it('get_todo_image 返回 MCP image content 且 structuredContent 不重复 base64', function () {
+    $cloud = new CloudMcpCommandFakeCloudClient;
+
+    $res = cloudMcpInvoke('callGetTodoImage', [
+        'id' => '01ky1521knanpadjkys0s7wzkr', 'attachment_id' => '8675309',
+    ], $cloud);
+
+    expect($res['isError'])->toBeFalse()
+        ->and($res['content'])->toHaveCount(2)
+        ->and($res['content'][1])->toBe(['type' => 'image', 'data' => base64_encode('x'), 'mimeType' => 'image/png'])
+        ->and($res['structuredContent']['attachment']['id'])->toBe('8675309')
+        ->and($res['structuredContent']['attachment'])->not->toHaveKey('data')
+        ->and($cloud->fetchTodoImageCalls)->toBe(1);
+});
+
+it('get_todo_image 拒绝非法附件 id,不打云端', function () {
+    $cloud = new CloudMcpCommandFakeCloudClient;
+
+    $res = cloudMcpInvoke('callGetTodoImage', [
+        'id' => '01ky1521knanpadjkys0s7wzkr', 'attachment_id' => '../secret',
+    ], $cloud);
+
+    expect($res['isError'])->toBeTrue()
+        ->and($res['content'][0]['text'])->toContain('attachment_id 格式非法')
+        ->and($cloud->fetchTodoImageCalls)->toBe(0);
+});
+
 it('工具参数畸形类型在本地返回明确错误,不触发字符串转换 warning', function () {
     $cloud = new CloudMcpCommandFakeCloudClient;
 
@@ -329,9 +398,28 @@ it('McpLoop 协商协议、忽略 notification 并返回 tools/list 与 ping', f
     expect($run['responses'])->toHaveCount(3)
         ->and($run['responses'][0]['result']['protocolVersion'])->toBe('2025-06-18')
         ->and($run['responses'][0]['result']['instructions'])->toContain('frontend_bug')
-        ->and($run['responses'][1]['result']['tools'])->toHaveCount(6)
+        ->and($run['responses'][1]['result']['tools'])->toHaveCount(7)
+        ->and($run['responses'][1]['result']['tools'][5]['name'])->toBe('get_todo_image')
+        ->and($run['responses'][1]['result']['tools'][5])->toHaveKey('outputSchema')
         ->and($run['responses'][2]['result'])->toBe([])
         ->and($run['stderr'])->toBe('');
+});
+
+it('McpLoop 对 2025-06 以前客户端隐藏 structuredContent 与 outputSchema,文本结果仍完整', function () {
+    $run = cloudMcpRun([
+        ['jsonrpc' => '2.0', 'id' => 1, 'method' => 'initialize', 'params' => ['protocolVersion' => '2024-11-05']],
+        ['jsonrpc' => '2.0', 'id' => 2, 'method' => 'tools/list'],
+        [
+            'jsonrpc' => '2.0', 'id' => 3, 'method' => 'tools/call',
+            'params'  => ['name' => 'get_todo', 'arguments' => ['id' => '01ky1521knanpadjkys0s7wzkr']],
+        ],
+    ], new CloudMcpCommandFakeCloudClient);
+
+    expect($run['responses'][0]['result']['protocolVersion'])->toBe('2024-11-05')
+        ->and($run['responses'][1]['result']['tools'][0])->not->toHaveKey('outputSchema')
+        ->and($run['responses'][2]['result'])->not->toHaveKey('structuredContent')
+        ->and($run['responses'][2]['result']['content'][0]['text'])->toContain('结构化现场上下文')
+        ->and($run['responses'][2]['result']['content'][0]['text'])->toContain('https://app.test/orders/1');
 });
 
 it('McpLoop 对解析错误、非法请求和非法参数返回标准 JSON-RPC 错误', function () {

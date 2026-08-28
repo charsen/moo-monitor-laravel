@@ -47,12 +47,27 @@ COMPOSER_MEMORY_LIMIT=-1 composer require "charsen/moo-monitor-laravel:@dev" -W 
 LARAVEL_VER="$(php -d "$ER" artisan --version 2>/dev/null)"
 echo "    实际：${LARAVEL_VER}"
 
-echo "==> [3/6] 断言 provider boot + 4 个命令注册"
+echo "==> [3/6] 断言 provider boot + 4 个命令注册 + MCP 七工具握手"
 LIST="$(php -d "$ER" artisan list 2>/dev/null)"
 for cmd in moo:cloud:push moo:cloud:test moo:cloud:mcp moo:monitor:migrate; do
   echo "$LIST" | grep -q "$cmd" || { echo "✗ 失败：命令 ${cmd} 未注册（provider 未能 boot？）"; exit 1; }
 done
-echo "    ok：4 个命令均注册"
+MCP_OUT="$(printf '%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+  | php -d "$ER" artisan moo:cloud:mcp 2>/dev/null)"
+MCP_OUT="$MCP_OUT" php -r '
+$lines = array_values(array_filter(explode("\n", (string) getenv("MCP_OUT"))));
+$responses = array_map(fn ($line) => json_decode($line, true), $lines);
+$tools = $responses[1]["result"]["tools"] ?? [];
+$names = array_column($tools, "name");
+if (count($tools) !== 7 || ! in_array("get_todo_image", $names, true)
+    || ! isset($tools[5]["outputSchema"])) {
+    fwrite(STDERR, "MCP tools smoke failed: " . json_encode($responses) . "\n");
+    exit(1);
+}
+'
+echo "    ok：4 个命令均注册，MCP 2025-06-18 返回七工具与 outputSchema"
 
 echo "==> [4/6] 断言自动 push 继承 --env 且不同环境使用独立互斥锁"
 php -d "$ER" -r '

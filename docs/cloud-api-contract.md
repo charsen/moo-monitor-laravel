@@ -164,10 +164,11 @@ there are no new records to upload.
 
 `status` is optional.
 
-Each todo row carries `category` (added 2026-06-22): `bug` = reported via the
-Chrome extension, `task` = created manually in the cloud UI. The column is an
-enum defaulting to `bug`, so pre-existing rows read back as `bug`. The list
-endpoint filters by `status` only — there is no server-side `category` filter.
+Each todo row carries `category`: `bug` = unclassified defect,
+`frontend_bug` = frontend defect, `backend_bug` = backend defect, and `task` =
+ordinary task. The column defaults to `bug`, so pre-existing rows read back as
+`bug`. The list endpoint filters by `status` only — there is no server-side
+`category` filter.
 
 ### Get Todo
 
@@ -177,8 +178,28 @@ endpoint filters by `status` only — there is no server-side `category` filter.
 { "token": "moo_xxx", "id": "todo-id" }
 ```
 
-The returned `todo` object includes `category` (`bug`/`task`); its `markdown`
-field is rendered with a matching heading (`# Bug：…` / `# 任务：…`).
+The returned `todo` object includes the four-value `category`, sanitized
+`page_url`, `context_requests`, `context_errors`, timeline fields, AI-ready
+`markdown`, and an `attachments` metadata array. Attachment metadata never
+contains a storage path, tokenized URL, or binary data. Image rows carry
+`ai_readable=true`; videos remain metadata-only.
+
+### Get Todo Image
+
+`POST /api/v1/todos/image`
+
+```json
+{
+  "token": "moo_xxx",
+  "id": "01J...",
+  "attachment_id": "8675309"
+}
+```
+
+The endpoint requires the `mcp` ability and verifies that both the Todo and
+image attachment belong to the token's project. It returns one bounded image
+preview as base64 plus `mime_type`, dimensions, and size. It never creates a
+public or signed attachment URL.
 
 ### Update Todo Status
 

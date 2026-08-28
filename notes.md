@@ -38,6 +38,8 @@
 - 同一 host 用 `artisan --env=XXX` 切换多个 Cloud 项目时，runtime/slow SQL YAML、cursor、partial ack、sync lock、prune 范围和 recorder cache key 必须共用 `StorageScope` 隔离；只隔离 cursor 仍会因同 hash 聚合与回收串项目。
 - 多环境 scheduler 必须把父级 `schedule:run/work --env=XXX` 原样传给自动注册的 `moo:cloud:push`；使用 Schedule 参数数组负责转义，环境值进入 command 后 `withoutOverlapping` mutex 会自然隔离。
 - Laravel 后台调度依赖独立 `schedule:finish` 释放 `withoutOverlapping` 锁，但该子命令不继承父级 `--env`；带环境 scope 的 Cloud push 必须前台执行让原进程解锁，无 `--env` 的单环境任务继续后台执行。
+- MCP `structuredContent` / `outputSchema` 只在协商到 `2025-06-18` 时返回；`2025-03-26` / `2024-11-05` 连接必须降级为同款完整 text content，图片 block 仍可用，不能为富结构静默破坏旧客户端。
+- Todo 现场图不能把 Cloud 登录态附件 URL 直接交给 AI：图片留在私有盘，由 `get_todo_image` 带独立 `mcp` Token 按 Todo + attachment 双键校验后单张返回有界 MCP image content；视频保持元信息-only。
 
 ## 用户偏好
 

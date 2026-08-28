@@ -401,7 +401,7 @@ class CloudClientTest extends TestCase
         $this->assertFalse((new CloudClient)->heartbeat());
     }
 
-    // ---- 待办读写(供 moo:cloud:mcp 的 list_open_todos / get_todo / update_todo_status)----
+    // ---- 待办读写(供 moo:cloud:mcp 的 list_open_todos / get_todo / get_todo_image / update_todo_status)----
 
     public function test_fetch_todos_hits_list_with_token_limit_status(): void
     {
@@ -442,6 +442,27 @@ class CloudClientTest extends TestCase
         Http::assertSent(fn ($req) => ($req->data()['id'] ?? null) === '01ABC');
     }
 
+    public function test_fetch_todo_image_hits_image_with_todo_and_attachment_id(): void
+    {
+        $this->configureCloud();
+        Http::fake([
+            'cloud.test/api/v1/todos/image' => Http::response([
+                'ok'    => true,
+                'image' => ['id' => '123', 'todo_id' => '01ABC', 'mime_type' => 'image/png', 'data' => 'eA=='],
+            ], 200),
+        ]);
+
+        $r = (new CloudClient)->fetchTodoImage('01ABC', '123');
+
+        $this->assertTrue($r['ok']);
+        $this->assertSame('image/png', $r['data']['image']['mime_type']);
+        Http::assertSent(function ($req) {
+            return str_starts_with((string) $req->url(), 'https://cloud.test/api/v1/todos/image')
+                && ($req->data()['id'] ?? null)            === '01ABC'
+                && ($req->data()['attachment_id'] ?? null) === '123';
+        });
+    }
+
     public function test_update_todo_status_hits_status_with_payload(): void
     {
         $this->configureCloud();
@@ -471,6 +492,7 @@ class CloudClientTest extends TestCase
         $client = new CloudClient;
         $this->assertFalse($client->fetchTodos()['ok']);
         $this->assertFalse($client->fetchTodo('01ABC')['ok']);
+        $this->assertFalse($client->fetchTodoImage('01ABC', '123')['ok']);
         $this->assertFalse($client->updateTodoStatus('01ABC', 'done')['ok']);
         Http::assertNothingSent();
     }

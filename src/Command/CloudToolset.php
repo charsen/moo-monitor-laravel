@@ -5,12 +5,13 @@ namespace Mooeen\Monitor\Command;
 use Mooeen\Monitor\Cloud\CloudClient;
 
 /**
- * moo:cloud:mcp 的工具层：六个工具的定义（name + description + JSON Schema 入参）与 handler，
+ * moo:cloud:mcp 的工具层：七个工具的定义（name + description + JSON Schema 入参/出参）与 handler，
  * 以及给 AI 的 initialize.instructions。从 CloudMcpCommand 拆出（P5）—— 命令类只剩装配，
  * 传输层 McpLoop 负责 stdin 循环 + JSON-RPC 编解码，本类只管「有哪些工具、每个工具怎么执行」。
  *
- * runtime 三件套（list_open_runtimes / get_runtime / resolve_runtime）+ 待办三件套
- * （list_open_todos / get_todo / update_todo_status）。凭据复用 moo-monitor.cloud 的 base_url + token。
+ * runtime 三件套（list_open_runtimes / get_runtime / resolve_runtime）+ 待办四件套
+ * （list_open_todos / get_todo / get_todo_image / update_todo_status）。凭据复用 moo-monitor.cloud 的
+ * base_url + token。
  */
 class CloudToolset
 {
@@ -28,15 +29,16 @@ class CloudToolset
             '',
             '另暴露团队「待办」：category=bug 是待分类缺陷，frontend_bug / backend_bug 是已归类的前端 / 后端缺陷，task 是普通任务；缺陷通常带页面 URL / 失败请求 / JS 错误上下文。工作流：',
             '1. list_open_todos 挑要处理的待办（默认 open + in_progress；has_more=true 时按 next_offset 翻页）；id 是后续操作的唯一键。',
-            '2. get_todo <id> 拿完整上下文（描述 + 失败请求 + JS 错误 + 时间线）；动手前先 update_todo_status <id> in_progress 认领，避免与他人重复处理。',
-            '3. 修完并验证后 update_todo_status <id> done(note 写改了什么)闭环；未确认完成不要标 done。',
+            '2. get_todo <id> 拿完整上下文（描述 + 现场 URL + 失败请求 + JS 错误 + 时间线 + 附件清单）；动手前先 update_todo_status <id> in_progress 认领，避免与他人重复处理。',
+            '3. 若附件清单有 ai_readable=true 的图片，视觉/排版/页面缺陷必须按 attachment_id 调 get_todo_image 识别现场，不能只凭标题和文字猜。图片可能含业务数据，只按处理需要读取。',
+            '4. 修完并验证后 update_todo_status <id> done(note 写改了什么)闭环；未确认完成不要标 done。',
         ]);
     }
 
-    /** 六个工具的声明（name + description + JSON Schema 入参）。 */
-    public function definitions(): array
+    /** 七个工具的声明（name + description + JSON Schema 入参/出参）。 */
+    public function definitions(bool $includeOutputSchema = true): array
     {
-        return [
+        $tools = [
             [
                 'name'        => 'list_open_runtimes',
                 'description' => '列出本项目在云端「待处理」的 runtime 运行时错误（默认 open + in_progress，最近优先），用于挑选要修复的异常。返回每条的 hash、异常类、消息、位置、出现次数。',
@@ -48,7 +50,8 @@ class CloudToolset
                         'offset' => ['type' => 'integer', 'description' => '分页偏移量，默认 0；下一页使用上次返回的 next_offset', 'minimum' => 0],
                     ],
                 ],
-                'annotations' => [
+                'outputSchema' => $this->listOutputSchema('runtimes'),
+                'annotations'  => [
                     'title'         => '列出云端待处理 runtime 错误',
                     'readOnlyHint'  => true,
                     'openWorldHint' => true,
@@ -65,7 +68,8 @@ class CloudToolset
                     ],
                     'required' => ['hash'],
                 ],
-                'annotations' => [
+                'outputSchema' => $this->detailOutputSchema('runtime'),
+                'annotations'  => [
                     'title'         => '查看单条 runtime 完整上下文',
                     'readOnlyHint'  => true,
                     'openWorldHint' => true,
@@ -83,7 +87,8 @@ class CloudToolset
                     ],
                     'required' => ['hash'],
                 ],
-                'annotations' => [
+                'outputSchema' => $this->statusOutputSchema('hash'),
+                'annotations'  => [
                     'title'           => '标记 runtime 为已解决',
                     'readOnlyHint'    => false,
                     'destructiveHint' => false,
@@ -102,7 +107,8 @@ class CloudToolset
                         'offset' => ['type' => 'integer', 'description' => '分页偏移量，默认 0；下一页使用上次返回的 next_offset', 'minimum' => 0],
                     ],
                 ],
-                'annotations' => [
+                'outputSchema' => $this->listOutputSchema('todos'),
+                'annotations'  => [
                     'title'         => '列出云端可处理待办',
                     'readOnlyHint'  => true,
                     'openWorldHint' => true,
@@ -110,16 +116,36 @@ class CloudToolset
             ],
             [
                 'name'        => 'get_todo',
-                'description' => '按 id 取单条待办的完整上下文：标题、描述、页面 URL、失败的网络请求、JS 错误、操作时间线，以及一段可直接用于分析修复的 markdown。处理前先调它，别凭 list 的标题猜。',
+                'description' => '按 id 取单条待办的完整上下文：标题、描述、现场 URL、失败请求、JS 错误栈、时间线、附件清单及 AI markdown。默认不带请求/响应 headers 和 body；确需复现接口时显式开启 with_network_payloads。',
                 'inputSchema' => [
                     'type'       => 'object',
                     'properties' => [
-                        'id' => ['type' => 'string', 'description' => '待办 id（来自 list_open_todos）'],
+                        'id'                    => ['type' => 'string', 'description' => '待办 id（来自 list_open_todos）'],
+                        'with_network_payloads' => ['type' => 'boolean', 'description' => '是否返回已脱敏的请求/响应 headers 与 body（可能含业务数据），默认 false'],
                     ],
                     'required' => ['id'],
                 ],
-                'annotations' => [
+                'outputSchema' => $this->detailOutputSchema('todo'),
+                'annotations'  => [
                     'title'         => '查看单条待办完整上下文',
+                    'readOnlyHint'  => true,
+                    'openWorldHint' => true,
+                ],
+            ],
+            [
+                'name'        => 'get_todo_image',
+                'description' => '按 Todo id + attachment_id 安全读取一张私有现场图片，返回 MCP image content 供 AI 识图。attachment_id 来自 get_todo 的 attachments；单次只取一张，不支持视频。',
+                'inputSchema' => [
+                    'type'       => 'object',
+                    'properties' => [
+                        'id'            => ['type' => 'string', 'description' => '待办 id（来自 get_todo）'],
+                        'attachment_id' => ['type' => 'string', 'description' => 'ai_readable=true 的图片附件 id（来自 get_todo.attachments）'],
+                    ],
+                    'required' => ['id', 'attachment_id'],
+                ],
+                'outputSchema' => $this->detailOutputSchema('attachment'),
+                'annotations'  => [
+                    'title'         => '读取 Todo 现场图片供 AI 识图',
                     'readOnlyHint'  => true,
                     'openWorldHint' => true,
                 ],
@@ -137,7 +163,8 @@ class CloudToolset
                     ],
                     'required' => ['id', 'status'],
                 ],
-                'annotations' => [
+                'outputSchema' => $this->statusOutputSchema('id'),
+                'annotations'  => [
                     'title'           => '回写待办状态（认领 / 完成）',
                     'readOnlyHint'    => false,
                     'destructiveHint' => false,
@@ -146,6 +173,15 @@ class CloudToolset
                 ],
             ],
         ];
+
+        if (! $includeOutputSchema) {
+            foreach ($tools as &$tool) {
+                unset($tool['outputSchema']);
+            }
+            unset($tool);
+        }
+
+        return $tools;
     }
 
     /** tools/call：分派到具体工具，统一包装为 MCP content 结果。 */
@@ -157,6 +193,7 @@ class CloudToolset
             'resolve_runtime'    => $this->callResolveRuntime($args),
             'list_open_todos'    => $this->callListTodos($args),
             'get_todo'           => $this->callGetTodo($args),
+            'get_todo_image'     => $this->callGetTodoImage($args),
             'update_todo_status' => $this->callUpdateTodoStatus($args),
             default              => $this->toolError("未知工具：{$name}"),
         };
@@ -193,16 +230,17 @@ class CloudToolset
             return $this->toolError('分页失败：' . $page['error']);
         }
 
-        $rows = $r['data']['runtimes'] ?? [];
+        $rows       = $r['data']['runtimes'] ?? [];
+        $structured = $this->listStructured('runtimes', $rows, $page);
         if ($rows === []) {
             $scope = $status !== null ? "「{$status}」状态的" : '待处理的';
 
-            return $this->toolText("云端没有{$scope} runtime 错误。");
+            return $this->toolStructured("云端没有{$scope} runtime 错误。", $structured);
         }
 
         $hint = $this->paginationHint($page, count($rows), $limit, $status);
 
-        return $this->toolText('共 ' . count($rows) . " 条{$hint}:\n" . $this->jsonText($rows));
+        return $this->toolStructured('共 ' . count($rows) . " 条{$hint}:\n" . $this->jsonText($rows), $structured);
     }
 
     private function callGetRuntime(array $args): array
@@ -234,13 +272,19 @@ class CloudToolset
             return $this->toolError("未找到 hash「{$hash}」对应的 runtime（可能 hash 有误或已被清理）。先用 list_open_runtimes 取最新 hash。");
         }
 
-        // markdown 已是 toAiMarkdown 产出的「可直接喂 AI」文本；附 payload 时一并给出。
-        $text = (string) ($rt['markdown'] ?? $this->jsonText($rt));
+        // markdown 继续供旧客户端直接阅读；结构化字段同时保留，避免 Cloud 明明返回了时间、用户、
+        // frames 等上下文，却在 MCP 出口只剩摘要。
+        $text              = (string) ($rt['markdown'] ?? $this->jsonText($rt));
+        $structuredRuntime = $rt;
+        unset($structuredRuntime['markdown']);
+        $textContext = $structuredRuntime;
+        unset($textContext['payload']);
+        $text .= "\n\n## 结构化上下文\n```json\n" . $this->jsonText($textContext) . "\n```";
         if (! empty($rt['payload'])) {
             $text .= "\n\n## 请求入参（payload）\n```json\n" . $this->jsonText($rt['payload']) . "\n```";
         }
 
-        return $this->toolText($text);
+        return $this->toolStructured($text, ['runtime' => $structuredRuntime]);
     }
 
     private function callResolveRuntime(array $args): array
@@ -274,10 +318,23 @@ class CloudToolset
         if (! empty($r['data']['already_resolved'])) {
             $byWho = (string) ($r['data']['runtime']['resolved_by'] ?? '');
 
-            return $this->toolText("runtime {$hash} 此前已被解决" . ($byWho !== '' ? "（解决人：{$byWho}）" : '') . '，既有解决记录保留，本次未改动。');
+            return $this->toolStructured(
+                "runtime {$hash} 此前已被解决" . ($byWho !== '' ? "（解决人：{$byWho}）" : '') . '，既有解决记录保留，本次未改动。',
+                [
+                    'hash'             => $hash,
+                    'status'           => 'resolved',
+                    'already_resolved' => true,
+                    'runtime'          => $r['data']['runtime'] ?? null,
+                ],
+            );
         }
 
-        return $this->toolText("已将 runtime {$hash} 标记为「已解决」。");
+        return $this->toolStructured("已将 runtime {$hash} 标记为「已解决」。", [
+            'hash'             => $hash,
+            'status'           => 'resolved',
+            'already_resolved' => false,
+            'runtime'          => $r['data']['runtime'] ?? null,
+        ]);
     }
 
     private function callListTodos(array $args): array
@@ -309,16 +366,17 @@ class CloudToolset
             return $this->toolError('分页失败：' . $page['error']);
         }
 
-        $rows = $r['data']['todos'] ?? [];
+        $rows       = $r['data']['todos'] ?? [];
+        $structured = $this->listStructured('todos', $rows, $page);
         if ($rows === []) {
             $scope = $status !== null ? "「{$status}」状态的" : '可处理的';
 
-            return $this->toolText("云端没有{$scope}待办。");
+            return $this->toolStructured("云端没有{$scope}待办。", $structured);
         }
 
         $hint = $this->paginationHint($page, count($rows), $limit, $status);
 
-        return $this->toolText('共 ' . count($rows) . " 条{$hint}:\n" . $this->jsonText($rows));
+        return $this->toolStructured('共 ' . count($rows) . " 条{$hint}:\n" . $this->jsonText($rows), $structured);
     }
 
     private function callGetTodo(array $args): array
@@ -333,6 +391,16 @@ class CloudToolset
         if (! $this->isTodoId($id)) {
             return $this->toolError('id 格式非法，必须是 20–32 位字母或数字。');
         }
+        if (array_key_exists('with_network_payloads', $args)
+            && ! is_bool($args['with_network_payloads'])
+            && ! is_string($args['with_network_payloads'])) {
+            return $this->toolError('with_network_payloads 必须是布尔值。');
+        }
+        $withNetworkPayloads = filter_var(
+            $args['with_network_payloads'] ?? false,
+            FILTER_VALIDATE_BOOL,
+            FILTER_NULL_ON_FAILURE,
+        ) ?? false;
 
         $r = $this->cloud->fetchTodo($id);
         if (! $r['ok']) {
@@ -344,7 +412,7 @@ class CloudToolset
             return $this->toolError("未找到 id「{$id}」对应的待办（可能 id 有误或已删除）。先用 list_open_todos 取最新 id。");
         }
 
-        // markdown 是 toAiMarkdown 产出的「可直接喂 AI」文本；时间线/截图数附在其后供参考。
+        // markdown 继续供旧客户端阅读；结构化上下文追加在文本后并通过 structuredContent 原样提供。
         $text     = (string) ($todo['markdown'] ?? $this->jsonText($todo));
         $category = (string) ($todo['category'] ?? '');
         // category 是云端分类字段；markdown 标题已含分类，
@@ -361,14 +429,54 @@ class CloudToolset
             '类型'      => $kind,
             '状态'      => $todo['status']   ?? '',
             '优先级'    => $todo['priority'] ?? '',
-            '截图/录屏' => ($todo['attachments_count'] ?? 0) . ' 个（二进制，详见云端 UI）',
+            '现场 URL'  => $todo['page_url'] ?? '',
+            '截图/录屏' => ($todo['attachments_count'] ?? 0) . ' 个（图片按 attachment_id 调 get_todo_image 识别；视频详见云端 UI）',
         ];
         $text .= "\n\n## 元信息\n" . $this->jsonText($extra);
-        if (! empty($todo['events'])) {
-            $text .= "\n\n## 操作时间线\n" . $this->jsonText($todo['events']);
+        $structuredTodo = $this->todoStructured($todo, $withNetworkPayloads);
+        $text .= "\n\n## 结构化现场上下文\n```json\n" . $this->jsonText($structuredTodo) . "\n```";
+
+        return $this->toolStructured($text, ['todo' => $structuredTodo]);
+    }
+
+    private function callGetTodoImage(array $args): array
+    {
+        foreach (['id', 'attachment_id'] as $key) {
+            if (array_key_exists($key, $args) && ! is_string($args[$key])) {
+                return $this->toolError("{$key} 必须是字符串。");
+            }
+        }
+        $id           = trim($args['id'] ?? '');
+        $attachmentId = trim($args['attachment_id'] ?? '');
+        if (! $this->isTodoId($id)) {
+            return $this->toolError('id 格式非法，必须是 20–32 位字母或数字。');
+        }
+        if (! $this->isAttachmentId($attachmentId)) {
+            return $this->toolError('attachment_id 格式非法，必须是 1–32 位数字。');
         }
 
-        return $this->toolText($text);
+        $r = $this->cloud->fetchTodoImage($id, $attachmentId);
+        if (! $r['ok']) {
+            return $this->toolError('获取图片失败：' . $r['error']);
+        }
+
+        $image  = $r['data']['image'] ?? [];
+        $data   = $image['data']      ?? null;
+        $mime   = $image['mime_type'] ?? null;
+        $binary = is_string($data) ? base64_decode($data, true) : false;
+        if ($binary === false || strlen($binary) > 2 * 1024 * 1024
+                              || ! is_string($mime) || ! in_array($mime, ['image/png', 'image/jpeg', 'image/webp', 'image/gif'], true)) {
+            return $this->toolError('Cloud 返回的图片数据无效。');
+        }
+
+        $attachment = $image;
+        unset($attachment['data']);
+
+        return $this->toolStructured(
+            "已读取待办 {$id} 的现场图片 {$attachmentId}（{$mime}）。请结合图片与 get_todo 的现场 URL、网络请求和错误栈判断。",
+            ['attachment' => $attachment],
+            [['type' => 'image', 'data' => $data, 'mimeType' => $mime]],
+        );
     }
 
     private function callUpdateTodoStatus(array $args): array
@@ -401,28 +509,135 @@ class CloudToolset
         }
 
         if (! empty($r['data']['already_done'])) {
-            return $this->toolText("待办 {$id} 此前已是「完成」状态，本次未改动（既有完成记录保留）。");
+            return $this->toolStructured("待办 {$id} 此前已是「完成」状态，本次未改动（既有完成记录保留）。", [
+                'id'           => $id,
+                'status'       => 'done',
+                'already_done' => true,
+                'todo'         => $r['data']['todo'] ?? null,
+            ]);
         }
 
         if (! empty($r['data']['already_in_progress'])) {
-            return $this->toolText("待办 {$id} 已是「处理中」—— 可能已被他人认领，动手前用 get_todo 看时间线确认，避免重复处理。");
+            return $this->toolStructured("待办 {$id} 已是「处理中」—— 可能已被他人认领，动手前用 get_todo 看时间线确认，避免重复处理。", [
+                'id'                  => $id,
+                'status'              => 'in_progress',
+                'already_in_progress' => true,
+                'todo'                => $r['data']['todo'] ?? null,
+            ]);
         }
 
         $label = $status === 'done' ? '已完成' : '处理中（已认领）';
 
-        return $this->toolText("已将待办 {$id} 标记为「{$label}」。");
+        return $this->toolStructured("已将待办 {$id} 标记为「{$label}」。", [
+            'id'                  => $id,
+            'status'              => $status,
+            'already_done'        => false,
+            'already_in_progress' => false,
+            'todo'                => $r['data']['todo'] ?? null,
+        ]);
     }
 
-    /** MCP 工具成功结果（纯文本内容）。 */
-    private function toolText(string $text): array
+    /**
+     * MCP 工具成功结果：保留旧客户端依赖的 text，同时给现代客户端稳定 structuredContent；
+     * $extraContent 用于 image 等非文本 block。
+     */
+    private function toolStructured(string $text, array $structured, array $extraContent = []): array
     {
-        return ['content' => [['type' => 'text', 'text' => $text]], 'isError' => false];
+        return [
+            'content'           => array_merge([['type' => 'text', 'text' => $text]], $extraContent),
+            'structuredContent' => $structured,
+            'isError'           => false,
+        ];
     }
 
     /** MCP 工具错误结果（isError=true，让模型看到失败原因而非协议层报错）。 */
     private function toolError(string $text): array
     {
         return ['content' => [['type' => 'text', 'text' => $text]], 'isError' => true];
+    }
+
+    /** @param array<int,mixed> $rows */
+    private function listStructured(string $key, array $rows, array $page): array
+    {
+        return [
+            'count'                => count($rows),
+            'pagination_supported' => $page['supported'],
+            'offset'               => $page['offset'],
+            'has_more'             => $page['supported'] ? $page['has_more'] : null,
+            'next_offset'          => $page['supported'] ? $page['next_offset'] : null,
+            $key                   => $rows,
+        ];
+    }
+
+    private function todoStructured(array $todo, bool $withNetworkPayloads): array
+    {
+        unset($todo['markdown']);
+
+        if (! $withNetworkPayloads) {
+            $todo['context_requests'] = $this->compactRows(
+                $todo['context_requests'] ?? [],
+                ['id', 'kind', 'method', 'url', 'status', 'ok', 'duration', 'startedAt', 'error', 'responseSizeBytes'],
+            );
+        }
+        $todo['context_errors'] = $this->compactRows(
+            $todo['context_errors'] ?? [],
+            ['id', 'level', 'message', 'stack', 'source', 'line', 'col', 'startedAt', 'startTime'],
+        );
+        $todo['network_payloads_included'] = $withNetworkPayloads;
+
+        return $todo;
+    }
+
+    private function compactRows(mixed $rows, array $keys): mixed
+    {
+        if (! is_array($rows)) {
+            return $rows;
+        }
+
+        $allowed = array_fill_keys($keys, true);
+        $out     = [];
+        foreach ($rows as $key => $row) {
+            $out[$key] = is_array($row) ? array_intersect_key($row, $allowed) : $row;
+        }
+
+        return $out;
+    }
+
+    private function listOutputSchema(string $key): array
+    {
+        return [
+            'type'       => 'object',
+            'properties' => [
+                'count'                => ['type' => 'integer'],
+                'pagination_supported' => ['type' => 'boolean'],
+                'offset'               => ['type' => 'integer'],
+                'has_more'             => ['type' => ['boolean', 'null']],
+                'next_offset'          => ['type' => ['integer', 'null']],
+                $key                   => ['type' => 'array', 'items' => ['type' => 'object']],
+            ],
+            'required' => ['count', 'pagination_supported', 'offset', 'has_more', 'next_offset', $key],
+        ];
+    }
+
+    private function detailOutputSchema(string $key): array
+    {
+        return [
+            'type'       => 'object',
+            'properties' => [$key => ['type' => 'object']],
+            'required'   => [$key],
+        ];
+    }
+
+    private function statusOutputSchema(string $identity): array
+    {
+        return [
+            'type'       => 'object',
+            'properties' => [
+                $identity => ['type' => 'string'],
+                'status'  => ['type' => 'string'],
+            ],
+            'required' => [$identity, 'status'],
+        ];
     }
 
     /**
@@ -525,5 +740,10 @@ class CloudToolset
     private function isTodoId(string $id): bool
     {
         return preg_match('/^[0-9a-zA-Z]{20,32}$/', $id) === 1;
+    }
+
+    private function isAttachmentId(string $id): bool
+    {
+        return preg_match('/^\d{1,32}$/', $id) === 1;
     }
 }

@@ -334,6 +334,10 @@ claude mcp add moo-cloud-b -- php artisan moo:cloud:mcp --env=PROJECT_B
 
 待办分四类：`bug`（待分类缺陷）、`frontend_bug`（前端缺陷）、`backend_bug`（后端缺陷）和 `task`（普通任务）。`list_open_todos` / `get_todo` 返回的「类型」字段会标明，便于 AI 选择正确代码范围并区分「修缺陷」和「做任务」。
 
+七个工具在保留旧版文本结果的同时，为协商到 MCP `2025-06-18` 的客户端提供 `structuredContent`；旧协议连接不声明 `outputSchema`、不返回 `structuredContent`，但完整文本与图片 content 保持可用。runtime 三件套负责列表、完整上下文与解决回写；Todo 四件套负责列表、详情、现场图片识别与状态回写。`get_todo` 会返回脱敏后的现场 URL、请求定位信息、JS 错误栈、时间线和附件清单；请求/响应 headers 与 body 默认不进入 AI 上下文，确需复现接口时显式传 `with_network_payloads=true`。
+
+Todo 图片保留在 Cloud 私有盘，不返回公开或带 Token 的 URL。`get_todo` 的 `attachments` 中出现 `ai_readable=true` 时，使用对应 `attachment_id` 调 `get_todo_image`；工具经同一枚 `mcp` Token 校验项目与附件归属，一次返回一张有界 MCP image content。视频当前只返回元信息，需到 Cloud UI 查看。
+
 ## 从 moo-scaffold <= 3.8 迁移
 
 `moo-scaffold <= 3.8` 中的监控能力已经拆分到本包。升级时按下面步骤处理：
