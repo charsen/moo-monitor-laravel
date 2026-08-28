@@ -44,6 +44,8 @@ class CloudClient
 
     public const PATH_TODOS_GET = 'api/v1/todos/get';
 
+    public const PATH_TODOS_IMAGE = 'api/v1/todos/image';
+
     public const PATH_TODOS_STATUS = 'api/v1/todos/status';
 
     private string $baseUrl;
@@ -362,6 +364,17 @@ class CloudClient
     public function fetchTodo(string $id): array
     {
         return $this->read(self::PATH_TODOS_GET, ['id' => $id]);
+    }
+
+    /**
+     * 按需取一张 Todo 现场图片（get_todo_image 工具）。Cloud 以 MCP token 做项目/附件归属校验，
+     * 返回有界 base64 预览；这里保持纯传输，不落临时文件、不生成公开 URL。
+     *
+     * @return array{ok:bool,status:int,data:?array<string,mixed>,error:?string}
+     */
+    public function fetchTodoImage(string $id, string $attachmentId): array
+    {
+        return $this->read(self::PATH_TODOS_IMAGE, ['id' => $id, 'attachment_id' => $attachmentId]);
     }
 
     /**

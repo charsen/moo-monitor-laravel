@@ -17,8 +17,8 @@
  *
  * 接入（在任意装了 moo-monitor-laravel 的项目仓库根目录）：
  *   claude mcp add moo-cloud -- php artisan moo:cloud:mcp
- * 之后 AI 即有六个工具：runtime 三件套（list_open_runtimes / get_runtime / resolve_runtime）
- * + 待办三件套（list_open_todos / get_todo / update_todo_status）。
+ * 之后 AI 即有七个工具：runtime 三件套（list_open_runtimes / get_runtime / resolve_runtime）
+ * + 待办四件套（list_open_todos / get_todo / get_todo_image / update_todo_status）。
  * 凭据复用 moo-monitor.cloud 已配置的 base_url + token（私密 Host token 必带独立 mcp 能力）。
  */
 
