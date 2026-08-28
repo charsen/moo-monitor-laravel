@@ -4,10 +4,22 @@
 
 ## Unreleased
 
+### Changed
+
+- **双 Git 仓库直接交付**：移除依赖 Gitee/GitHub Token、定时执行 `git push --mirror` 的 GitHub Actions 自动镜像；今后以 Gitee `origin` 为主仓、GitHub `github` 为公共仓，branch/tag/release 分别推送并对照 refs，避免凭据、网络或镜像覆盖故障造成两端状态不明。
+
+## [0.1.15] — 2026-08-28
+
 ### Added
 
 - **MCP 富结构上下文**：七个工具保留既有 text content，并为协商到 `2025-06-18` 的客户端增加带 `outputSchema` 的 `structuredContent`；旧协议自动降级为完整文本。Todo 详情补齐现场 URL、请求定位信息、JS 错误栈、时间线和附件元数据，网络 headers/body 继续显式 opt-in。
 - **Todo 现场图片识别**：新增 `get_todo_image`，按 Todo 与附件 id 经 Cloud `mcp` ability 取单张有界私有图片，并以 MCP image content 返回，不生成公开或带 Token 的 URL。
+
+### Verified
+
+- `composer quality`：222 passed / 836 assertions。
+- `composer smoke:lower`：Laravel Framework 8.83.29 安装、provider boot、`moo:cloud:mcp` 七工具真实 stdio 握手、scoped scheduler、调度失败采集与真实 HTTP 重试路径通过。
+- 与 moo-scaffold-cloud 的 rich Todo fixture 逐字节一致；现场 URL、默认隐藏网络 headers/body、JS 错误栈、附件元数据、私有图片 content 和旧 MCP 协议降级均有契约测试。
 
 ## [0.1.14] — 2026-08-26
 

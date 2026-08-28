@@ -59,6 +59,12 @@ Laravel 后端监控采集 SDK，用来把项目里的 **运行时异常** 和 *
 
 > 运行时代码只用 Laravel 8+ 通用 API，对 L8 宿主零行为差异。维护侧以 Laravel 12（`orchestra/testbench ^10`）为主测目标跑完整功能测试；跨版本兼容以安装解析 + 最小 Laravel 应用启动验证守护（确保服务提供者、命令注册和基础配置在 Laravel 8–12 都能正常加载），发版前另可用 `composer smoke:lower` 对低版本宿主做一次接入冒烟（见「开发」）。
 
+## 源码仓库与发布
+
+- Gitee [`charsen/moo-monitor-laravel`](https://gitee.com/charsen/moo-monitor-laravel) 是主仓库，本地远端名固定为 `origin`。
+- GitHub [`charsen/moo-monitor-laravel`](https://github.com/charsen/moo-monitor-laravel) 是公共仓库，本地远端名固定为 `github`。
+- 两端不使用 GitHub Actions、Gitee 或第三方自动镜像。维护者发版时分别推送 branch/tag，并逐项核对两端 refs；任一端失败或不一致都不算发布完成。
+
 ## 安装
 
 ```bash
