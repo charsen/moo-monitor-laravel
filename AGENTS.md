@@ -49,6 +49,8 @@
 
 ## 验证与交付
 
+- 本仓采用双 Git 远端：Gitee 主仓固定为 `origin`，GitHub 公共仓固定为 `github`。禁止恢复 GitHub Actions、Gitee 或第三方平台的定时/自动/双向镜像同步；自动镜像的凭据、网络和 ref 覆盖链路不稳定，不能作为交付真相。
+- commit、分支、tag 和 release 必须按 Gitee `origin` → GitHub `github` 的顺序分别推送；每次推送后用 `git ls-remote` 对照两端目标 branch、tag 对象及 peeled commit。任一端失败或 refs 不一致时不得宣称交付完成，也不得用 `git push --mirror` 扩大影响范围。
 - 文档-only 至少运行 `git diff --check`，并核对 README、config 和 Cloud 契约的同款描述。
 - 代码改动开发中按需先跑目标 Pest；最终代码状态执行一次 `composer quality`，它已聚合 Composer 校验、lint 和测试，不再重复运行 `composer test`，失败诊断时才拆分。需要格式化时用 Pint 显式处理本任务文件并复核 diff，不对全部脏文件运行写入式 `composer format`。
 - 改 Laravel 兼容面时追加低版本安装/启动冒烟，不能只凭 Testbench 10 宣称 Laravel 8～12 全部通过。
