@@ -2,6 +2,13 @@
 
 `moo-monitor-laravel` 版本变更记录，按 [Keep a Changelog](https://keepachangelog.com/) + [SemVer](https://semver.org/) 风格。
 
+## Unreleased
+
+### Added
+
+- **MCP 富结构上下文**：七个工具保留既有 text content，并为协商到 `2025-06-18` 的客户端增加带 `outputSchema` 的 `structuredContent`；旧协议自动降级为完整文本。Todo 详情补齐现场 URL、请求定位信息、JS 错误栈、时间线和附件元数据，网络 headers/body 继续显式 opt-in。
+- **Todo 现场图片识别**：新增 `get_todo_image`，按 Todo 与附件 id 经 Cloud `mcp` ability 取单张有界私有图片，并以 MCP image content 返回，不生成公开或带 Token 的 URL。
+
 ## [0.1.14] — 2026-08-26
 
 为本地开发环境补充一次性噪音清理契约，同时保持 Cloud 已解决记录与本地已同步聚合锚点不受影响。

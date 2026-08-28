@@ -27,6 +27,9 @@ class McpLoop
     /** @var resource */
     private $stderr;
 
+    /** 当前连接协商版本；2025-06-18 才声明 structuredContent / outputSchema。 */
+    private string $protocolVersion = '2025-06-18';
+
     /**
      * @param resource|null $stdout
      * @param resource|null $stderr
@@ -113,7 +116,7 @@ class McpLoop
                     break;
 
                 case 'tools/list':
-                    $this->reply($id, ['tools' => $this->toolset->definitions()]);
+                    $this->reply($id, ['tools' => $this->toolset->definitions($this->supportsStructuredContent())]);
                     break;
 
                 case 'tools/call':
@@ -123,10 +126,16 @@ class McpLoop
 
                         break;
                     }
-                    $this->reply($id, $this->toolset->call(
+                    $result = $this->toolset->call(
                         $params['name'],
                         $params['arguments'] ?? [],
-                    ));
+                    );
+                    // structured tool output 自 2025-06-18 才进入协议；旧客户端继续消费同一份完整 text
+                    // 与既有 image content，避免严格 schema 客户端因未知 structuredContent 拒绝整包。
+                    if (! $this->supportsStructuredContent()) {
+                        unset($result['structuredContent']);
+                    }
+                    $this->reply($id, $result);
                     break;
 
                 case 'ping':
@@ -149,6 +158,7 @@ class McpLoop
         $version   = in_array($requested, self::SUPPORTED_PROTOCOLS, true)
             ? $requested
             : self::SUPPORTED_PROTOCOLS[0];
+        $this->protocolVersion = $version;
 
         return [
             'protocolVersion' => $version,
@@ -156,6 +166,11 @@ class McpLoop
             'serverInfo'      => ['name' => 'moo-cloud', 'version' => '1.0.0'],
             'instructions'    => $this->toolset->instructions(),
         ];
+    }
+
+    private function supportsStructuredContent(): bool
+    {
+        return $this->protocolVersion === self::SUPPORTED_PROTOCOLS[0];
     }
 
     /** 成功响应。 */
