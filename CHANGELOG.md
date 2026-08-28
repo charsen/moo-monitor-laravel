@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+### Changed
+
+- **双 Git 仓库直接交付**：移除依赖 Gitee/GitHub Token、定时执行 `git push --mirror` 的 GitHub Actions 自动镜像；今后以 Gitee `origin` 为主仓、GitHub `github` 为公共仓，branch/tag/release 分别推送并对照 refs，避免凭据、网络或镜像覆盖故障造成两端状态不明。
+
 ## [0.1.15] — 2026-08-28
 
 ### Added
