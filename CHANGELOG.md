@@ -4,9 +4,12 @@
 
 ## Unreleased
 
+## [0.1.17] — 2026-08-29
+
 ### Changed
 
 - **双 Git 仓库直接交付**：移除依赖 Gitee/GitHub Token、定时执行 `git push --mirror` 的 GitHub Actions 自动镜像；今后以 Gitee `origin` 为主仓、GitHub `github` 为公共仓，branch/tag/release 分别推送并对照 refs，避免凭据、网络或镜像覆盖故障造成两端状态不明。
+- 统一根目录协作文档命名为 `NOTES.md` 与 `TODOS.md`；无运行时接口变化。
 
 ## [0.1.16] — 2026-08-28
 
