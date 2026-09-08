@@ -1,3 +1,8 @@
+---
+title: 云端 API 契约
+group: 后端监控
+order: 10
+---
 # Cloud API Contract
 
 This package talks to `moo-scaffold-cloud` through JSON POST endpoints. Every
