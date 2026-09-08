@@ -1,3 +1,8 @@
+---
+title: Plan 01：后端监控抽离与架构设计
+group: 后端监控研发计划
+order: 20
+---
 # Plan 01：从 moo-scaffold 抽离监控能力，建立 moo-monitor-laravel
 
 > 状态：已实施（2026-06-12 完成；§9 的 ⑥ 真实宿主验证、⑦ 发版打 tag 待做）
