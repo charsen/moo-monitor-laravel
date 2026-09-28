@@ -1,0 +1,15 @@
+# 让 composer dist（消费方 vendor/）只装运行必需文件：开发 / 测试 / 文档 / 工具不进包。
+# 运行必需保留：src/ config/ routes/ database/ lang/ scaffold/ composer.json README.md LICENSE
+/.claude            export-ignore
+/.editorconfig      export-ignore
+/.github            export-ignore
+/.gitattributes     export-ignore
+/.gitignore         export-ignore
+/.phpunit.cache     export-ignore
+/.vscode            export-ignore
+/CLAUDE.md          export-ignore
+/NOTES.md           export-ignore
+/docs               export-ignore
+/phpunit.xml        export-ignore
+/pint.json          export-ignore
+/tests              export-ignore
