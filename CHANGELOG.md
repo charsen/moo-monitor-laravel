@@ -4,6 +4,10 @@
 
 ## Unreleased
 
+## [0.1.19] - 2026-09-29
+
+- **破坏性：命名空间与 provider 对齐骨架约定** —— `Mooeen\Monitor\` → `Mooeen\MonitorLaravel\`，provider `MonitorProvider` → `MooeenMonitorLaravelServiceProvider`，psr-4 target 补尾斜杠。消费方需同步 `use`、provider 注册与 `extra.moo-private-packages[].provider-rel`。config stem 仍为 `moo-monitor`（刻意共享的产品 stem，登记为例外）。
+
 ## [0.1.18] - 2026-09-08
 
 - 统一 `docs/` Markdown 的 `title`、`group` 与整数 `order`，规范文档导航名称、分组和排序，保留原正文及标签。
