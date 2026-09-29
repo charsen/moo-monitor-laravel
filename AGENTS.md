@@ -50,3 +50,5 @@
 - 代码改动开发中按需先跑目标 Pest；最终代码状态执行一次 `composer quality`，它已聚合 Composer 校验、lint 和测试，不再重复运行 `composer test`，失败诊断时才拆分。需要格式化时用 Pint 显式处理本任务文件并复核 diff，不对全部脏文件运行写入式 `composer format`。
 - 改 Laravel 兼容面时追加低版本安装/启动冒烟，不能只凭 Testbench 10 宣称 Laravel 8～12 全部通过。
 - 改 Cloud/MCP/partial ack 时用双方同一 fixture 验证；改 scheduler 或多环境 scope 时至少覆盖单环境、多 `--env`、锁竞争和失败恢复。
+
+- **本仓是公开仓**（GitHub 匿名可见）：文档、提交信息、注释与产物里**不得出现未开源扩展包名与内部项目名**，统一写 `moo-<name>`、"某个内部 Host" 等中性表述；含内部信息的清单/方案放私有 plan 库。
