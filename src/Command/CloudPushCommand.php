@@ -13,15 +13,15 @@
  *   moo:cloud:push --dry-run           只统计待推条数，不真正发请求
  *
  * 适合接 cron / Laravel scheduler 自动执行；enabled + schedule 同时为真时，
- * MonitorProvider 已自动挂每分钟调度（需宿主跑 schedule:run）。
+ * MooeenMonitorLaravelServiceProvider 已自动挂每分钟调度（需宿主跑 schedule:run）。
  */
 
-namespace Mooeen\Monitor\Command;
+namespace Mooeen\MonitorLaravel\Command;
 
 use Illuminate\Console\Command;
-use Mooeen\Monitor\Cloud\CloudClient;
-use Mooeen\Monitor\Cloud\CloudSync;
-use Mooeen\Monitor\Cloud\HeartbeatMeta;
+use Mooeen\MonitorLaravel\Cloud\CloudClient;
+use Mooeen\MonitorLaravel\Cloud\CloudSync;
+use Mooeen\MonitorLaravel\Cloud\HeartbeatMeta;
 
 class CloudPushCommand extends Command
 {

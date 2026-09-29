@@ -1,7 +1,7 @@
 <?php declare(strict_types=1);
 
-use Mooeen\Monitor\Recorder\RuntimeErrorRecorder;
-use Mooeen\Monitor\Recorder\SqlSlowRecorder;
+use Mooeen\MonitorLaravel\Recorder\RuntimeErrorRecorder;
+use Mooeen\MonitorLaravel\Recorder\SqlSlowRecorder;
 
 /**
  * ship-checklist #13 回归锁:user-controlled path 段(runtime/sql-slow hash)在拼进

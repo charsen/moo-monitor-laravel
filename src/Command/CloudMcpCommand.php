@@ -22,10 +22,10 @@
  * 凭据复用 moo-monitor.cloud 已配置的 base_url + token（私密 Host token 必带独立 mcp 能力）。
  */
 
-namespace Mooeen\Monitor\Command;
+namespace Mooeen\MonitorLaravel\Command;
 
 use Illuminate\Console\Command;
-use Mooeen\Monitor\Cloud\CloudClient;
+use Mooeen\MonitorLaravel\Cloud\CloudClient;
 
 class CloudMcpCommand extends Command
 {

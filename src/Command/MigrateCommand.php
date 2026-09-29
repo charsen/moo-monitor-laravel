@@ -13,11 +13,11 @@
  *   3. .env 体检：列出仍残留的 SCAFFOLD_RUNTIME/SQL_SLOW/CLOUD 变量与新名对照（只提示，不改文件）。
  */
 
-namespace Mooeen\Monitor\Command;
+namespace Mooeen\MonitorLaravel\Command;
 
 use Illuminate\Console\Command;
-use Mooeen\Monitor\Recorder\RuntimeErrorRecorder;
-use Mooeen\Monitor\StorageScope;
+use Mooeen\MonitorLaravel\Recorder\RuntimeErrorRecorder;
+use Mooeen\MonitorLaravel\StorageScope;
 use Throwable;
 
 class MigrateCommand extends Command

@@ -1,10 +1,10 @@
 <?php declare(strict_types=1);
 
 use Illuminate\Support\Facades\Http;
-use Mooeen\Monitor\Cloud\CloudClient;
-use Mooeen\Monitor\Cloud\CloudSync;
-use Mooeen\Monitor\Recorder\RuntimeErrorRecorder;
-use Mooeen\Monitor\Recorder\SqlSlowRecorder;
+use Mooeen\MonitorLaravel\Cloud\CloudClient;
+use Mooeen\MonitorLaravel\Cloud\CloudSync;
+use Mooeen\MonitorLaravel\Recorder\RuntimeErrorRecorder;
+use Mooeen\MonitorLaravel\Recorder\SqlSlowRecorder;
 
 /**
  * CloudSync 单元/集成测试 —— 本地 yaml → moo-scaffold-cloud intake 的增量推送编排。

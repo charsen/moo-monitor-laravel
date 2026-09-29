@@ -1,8 +1,8 @@
 <?php declare(strict_types=1);
 
 use Illuminate\Http\Request;
-use Mooeen\Monitor\Recorder\RuntimeErrorRecorder;
-use Mooeen\Monitor\Recorder\SqlSlowRecorder;
+use Mooeen\MonitorLaravel\Recorder\RuntimeErrorRecorder;
+use Mooeen\MonitorLaravel\Recorder\SqlSlowRecorder;
 
 /**
  * P2-3 回归锁：console 语境 request 误标（失真 C）。

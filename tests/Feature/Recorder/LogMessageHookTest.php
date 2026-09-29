@@ -2,15 +2,15 @@
 
 declare(strict_types=1);
 
-namespace Mooeen\Monitor\Tests\Feature\Recorder;
+namespace Mooeen\MonitorLaravel\Tests\Feature\Recorder;
 
 use Illuminate\Http\Request;
 use Illuminate\Log\Events\MessageLogged;
 use Illuminate\Support\Facades\Log;
 use Mockery;
-use Mooeen\Monitor\LoggedErrorMessage;
-use Mooeen\Monitor\Recorder\RuntimeErrorRecorder;
-use Mooeen\Monitor\Tests\TestCase;
+use Mooeen\MonitorLaravel\LoggedErrorMessage;
+use Mooeen\MonitorLaravel\Recorder\RuntimeErrorRecorder;
+use Mooeen\MonitorLaravel\Tests\TestCase;
 use RuntimeException;
 use Symfony\Component\Yaml\Yaml;
 

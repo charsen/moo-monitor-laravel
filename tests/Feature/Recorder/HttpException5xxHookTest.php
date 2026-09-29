@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Mooeen\Monitor\Tests\Feature\Recorder;
+namespace Mooeen\MonitorLaravel\Tests\Feature\Recorder;
 
 use Illuminate\Support\Facades\Route;
-use Mooeen\Monitor\Recorder\RuntimeErrorRecorder;
-use Mooeen\Monitor\Tests\TestCase;
+use Mooeen\MonitorLaravel\Recorder\RuntimeErrorRecorder;
+use Mooeen\MonitorLaravel\Tests\TestCase;
 use Symfony\Component\Yaml\Yaml;
 
 /**

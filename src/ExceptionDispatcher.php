@@ -2,18 +2,18 @@
 
 declare(strict_types=1);
 
-namespace Mooeen\Monitor;
+namespace Mooeen\MonitorLaravel;
 
 use Illuminate\Http\Request;
-use Mooeen\Monitor\Concerns\SafelyLogs;
-use Mooeen\Monitor\Recorder\RuntimeErrorRecorder;
+use Mooeen\MonitorLaravel\Concerns\SafelyLogs;
+use Mooeen\MonitorLaravel\Recorder\RuntimeErrorRecorder;
 use Throwable;
 use WeakMap;
 
 /**
  * 统一异常分发（仅落盘）
  *
- * MonitorProvider 在 `exception.auto_hook`（默认开）时自动挂到 host 的 reportable 链；
+ * MooeenMonitorLaravelServiceProvider 在 `exception.auto_hook`（默认开）时自动挂到 host 的 reportable 链；
  * 宿主也可在 `bootstrap/app.php` 手动接入（两者并存不会双计，见 dispatch 的 WeakMap 防重）。
  * 异常落到 runtime channel:
  *   - runtime → RuntimeErrorRecorder 落盘 storage/moo-monitor/runtimes/<hash>.yaml，随后由 moo:cloud:push 推送云端

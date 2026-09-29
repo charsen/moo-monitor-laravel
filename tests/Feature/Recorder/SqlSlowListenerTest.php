@@ -2,14 +2,14 @@
 
 declare(strict_types=1);
 
-namespace Mooeen\Monitor\Tests\Feature\Recorder;
+namespace Mooeen\MonitorLaravel\Tests\Feature\Recorder;
 
 use DateTimeImmutable;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Support\Facades\Http;
-use Mooeen\Monitor\Recorder\SqlSlowListener;
-use Mooeen\Monitor\Recorder\SqlSlowRecorder;
-use Mooeen\Monitor\Tests\TestCase;
+use Mooeen\MonitorLaravel\Recorder\SqlSlowListener;
+use Mooeen\MonitorLaravel\Recorder\SqlSlowRecorder;
+use Mooeen\MonitorLaravel\Tests\TestCase;
 
 /**
  * plan 52:慢 SQL 监听器单测

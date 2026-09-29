@@ -1,8 +1,8 @@
 <?php declare(strict_types=1);
 
-use Mooeen\Monitor\Cloud\CloudClient;
-use Mooeen\Monitor\Command\CloudToolset;
-use Mooeen\Monitor\Command\McpLoop;
+use Mooeen\MonitorLaravel\Cloud\CloudClient;
+use Mooeen\MonitorLaravel\Command\CloudToolset;
+use Mooeen\MonitorLaravel\Command\McpLoop;
 
 class CloudMcpCommandFakeCloudClient extends CloudClient
 {

@@ -2,17 +2,17 @@
 
 declare(strict_types=1);
 
-namespace Mooeen\Monitor\Recorder;
+namespace Mooeen\MonitorLaravel\Recorder;
 
 use DateTimeInterface;
 use Illuminate\Database\Events\QueryExecuted;
-use Mooeen\Monitor\Concerns\SafelyLogs;
+use Mooeen\MonitorLaravel\Concerns\SafelyLogs;
 use Throwable;
 
 /**
  * 慢 SQL 监听器（仅落盘）
  *
- * 由 MonitorProvider 在 boot 时 Event::listen(QueryExecuted::class) 注册。
+ * 由 MooeenMonitorLaravelServiceProvider 在 boot 时 Event::listen(QueryExecuted::class) 注册。
  * 超 `moo-monitor.sql_slow.threshold_ms` 的查询由 SqlSlowRecorder 落盘 yaml（聚合 hash），
  * 随后经 moo:cloud:push 推送云端；慢查询通知由云端在 intake 时按项目规则触发。
  *

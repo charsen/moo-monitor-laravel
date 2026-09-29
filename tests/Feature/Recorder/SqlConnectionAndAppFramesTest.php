@@ -1,9 +1,9 @@
 <?php declare(strict_types=1);
 
 use Illuminate\Database\Events\QueryExecuted;
-use Mooeen\Monitor\Recorder\RuntimeErrorRecorder;
-use Mooeen\Monitor\Recorder\SqlSlowListener;
-use Mooeen\Monitor\Recorder\SqlSlowRecorder;
+use Mooeen\MonitorLaravel\Recorder\RuntimeErrorRecorder;
+use Mooeen\MonitorLaravel\Recorder\SqlSlowListener;
+use Mooeen\MonitorLaravel\Recorder\SqlSlowRecorder;
 
 /**
  * P1-6 回归锁：

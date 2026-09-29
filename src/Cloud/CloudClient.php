@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Mooeen\Monitor\Cloud;
+namespace Mooeen\MonitorLaravel\Cloud;
 
 use Illuminate\Support\Facades\Http;
 use Throwable;

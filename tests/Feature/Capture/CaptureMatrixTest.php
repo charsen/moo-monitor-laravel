@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Mooeen\Monitor\Tests\Feature\Capture;
+namespace Mooeen\MonitorLaravel\Tests\Feature\Capture;
 
 use Illuminate\Console\Events\ScheduledTaskFinished;
 use Illuminate\Console\Scheduling\Schedule;
@@ -10,11 +10,11 @@ use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Log\Events\MessageLogged;
 use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Support\Facades\Route;
-use Mooeen\Monitor\ExceptionDispatcher;
-use Mooeen\Monitor\Recorder\RuntimeErrorRecorder;
-use Mooeen\Monitor\Recorder\SqlSlowListener;
-use Mooeen\Monitor\Recorder\SqlSlowRecorder;
-use Mooeen\Monitor\Tests\TestCase;
+use Mooeen\MonitorLaravel\ExceptionDispatcher;
+use Mooeen\MonitorLaravel\Recorder\RuntimeErrorRecorder;
+use Mooeen\MonitorLaravel\Recorder\SqlSlowListener;
+use Mooeen\MonitorLaravel\Recorder\SqlSlowRecorder;
+use Mooeen\MonitorLaravel\Tests\TestCase;
 use RuntimeException;
 
 /**

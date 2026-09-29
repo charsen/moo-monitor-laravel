@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Mooeen\Monitor\Recorder;
+namespace Mooeen\MonitorLaravel\Recorder;
 
 use Illuminate\Http\Request;
-use Mooeen\Monitor\SelfTestException;
-use Mooeen\Monitor\StorageScope;
+use Mooeen\MonitorLaravel\SelfTestException;
+use Mooeen\MonitorLaravel\StorageScope;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 use Throwable;
 
@@ -192,7 +192,7 @@ class RuntimeErrorRecorder extends BucketedYamlRecorder
         // 注意口径（2026-07-09 修）：这条 5xx 分支只对 log_context / 手动 dispatch 等**旁路来源**生效。
         // reportable 主链根本走不到 HttpException —— 它在框架 internalDontReport 名单里、shouldntReport
         // 挡在 reportable 回调之前（vendor Handler.php），auto_hook 永远收不到 HttpException。真正把
-        // abort(5xx) 采进来的是 MonitorProvider 的 renderable 观察者（source=http_5xx，矩阵 #5）。
+        // abort(5xx) 采进来的是 MooeenMonitorLaravelServiceProvider 的 renderable 观察者（source=http_5xx，矩阵 #5）。
         if ($e instanceof HttpException) {
             if ($e->getStatusCode() < 500) {
                 return false;

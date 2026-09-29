@@ -2,10 +2,10 @@
 
 declare(strict_types=1);
 
-namespace Mooeen\Monitor\Recorder;
+namespace Mooeen\MonitorLaravel\Recorder;
 
 use Illuminate\Http\Request;
-use Mooeen\Monitor\StorageScope;
+use Mooeen\MonitorLaravel\StorageScope;
 use Throwable;
 
 /**
