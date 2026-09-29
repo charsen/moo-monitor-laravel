@@ -1,6 +1,6 @@
 <?php declare(strict_types=1);
 
-namespace Mooeen\Monitor\Recorder;
+namespace Mooeen\MonitorLaravel\Recorder;
 
 /**
  * 敏感信息脱敏。

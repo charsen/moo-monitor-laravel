@@ -1,9 +1,9 @@
 <?php declare(strict_types=1);
 
 use Illuminate\Support\Facades\Http;
-use Mooeen\Monitor\Cloud\CloudSync;
-use Mooeen\Monitor\Recorder\RuntimeErrorRecorder;
-use Mooeen\Monitor\Recorder\SqlSlowRecorder;
+use Mooeen\MonitorLaravel\Cloud\CloudSync;
+use Mooeen\MonitorLaravel\Recorder\RuntimeErrorRecorder;
+use Mooeen\MonitorLaravel\Recorder\SqlSlowRecorder;
 use Symfony\Component\Yaml\Yaml;
 
 /**

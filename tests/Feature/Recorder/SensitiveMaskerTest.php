@@ -1,6 +1,6 @@
 <?php declare(strict_types=1);
 
-use Mooeen\Monitor\Recorder\SensitiveMasker;
+use Mooeen\MonitorLaravel\Recorder\SensitiveMasker;
 
 /**
  * P4-2 单测：SensitiveMasker 从 trait 独立成 final class 后可纯单测（构造器注入 mask_keys，无容器/config 依赖）。

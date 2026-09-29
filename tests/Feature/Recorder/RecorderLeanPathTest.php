@@ -1,6 +1,6 @@
 <?php declare(strict_types=1);
 
-use Mooeen\Monitor\Recorder\RuntimeErrorRecorder;
+use Mooeen\MonitorLaravel\Recorder\RuntimeErrorRecorder;
 use Symfony\Component\ErrorHandler\Error\FatalError;
 
 /**

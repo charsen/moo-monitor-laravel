@@ -1,8 +1,8 @@
 <?php declare(strict_types=1);
 
-namespace Mooeen\Monitor\Command;
+namespace Mooeen\MonitorLaravel\Command;
 
-use Mooeen\Monitor\Cloud\CloudClient;
+use Mooeen\MonitorLaravel\Cloud\CloudClient;
 
 /**
  * moo:cloud:mcp 的工具层：七个工具的定义（name + description + JSON Schema 入参/出参）与 handler，

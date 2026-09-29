@@ -1,6 +1,6 @@
 <?php declare(strict_types=1);
 
-use Mooeen\Monitor\Recorder\RuntimeErrorRecorder;
+use Mooeen\MonitorLaravel\Recorder\RuntimeErrorRecorder;
 
 /**
  * P1-5 回归锁：异常链 previous（失真 E）。

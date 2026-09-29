@@ -1,7 +1,7 @@
 <?php declare(strict_types=1);
 
 use Illuminate\Support\Facades\Http;
-use Mooeen\Monitor\Recorder\RuntimeErrorRecorder;
+use Mooeen\MonitorLaravel\Recorder\RuntimeErrorRecorder;
 
 /**
  * moo:cloud:push 命令 wiring + 守卫分支测试。编排细节由 CloudSyncTest 覆盖,这里只验:

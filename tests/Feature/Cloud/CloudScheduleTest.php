@@ -2,11 +2,11 @@
 
 declare(strict_types=1);
 
-namespace Mooeen\Monitor\Tests\Feature\Cloud;
+namespace Mooeen\MonitorLaravel\Tests\Feature\Cloud;
 
 use Illuminate\Console\Scheduling\Schedule;
-use Mooeen\Monitor\MonitorProvider;
-use Mooeen\Monitor\Tests\TestCase;
+use Mooeen\MonitorLaravel\MooeenMonitorLaravelServiceProvider;
+use Mooeen\MonitorLaravel\Tests\TestCase;
 
 /**
  * 自动 Cloud push 必须继承父级 Artisan 的 --env，否则多 .env 项目会回落默认项目并串数据。
@@ -65,7 +65,7 @@ class CloudScheduleTest extends TestCase
         $_SERVER['argv'] = ['artisan', 'schedule:run'];
 
         $before = count(app(Schedule::class)->events());
-        (new MonitorProvider($this->app))->boot();
+        (new MooeenMonitorLaravelServiceProvider($this->app))->boot();
         $events = app(Schedule::class)->events();
         $event  = $events[array_key_last($events)];
 
@@ -81,7 +81,7 @@ class CloudScheduleTest extends TestCase
         $_SERVER['argv'] = ['artisan', 'schedule:run', '--env=' . $environment];
 
         $before = count(app(Schedule::class)->events());
-        (new MonitorProvider($this->app))->boot();
+        (new MooeenMonitorLaravelServiceProvider($this->app))->boot();
         $events = app(Schedule::class)->events();
 
         $this->assertCount($before + 1, $events);

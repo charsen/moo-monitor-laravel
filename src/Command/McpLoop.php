@@ -1,6 +1,6 @@
 <?php declare(strict_types=1);
 
-namespace Mooeen\Monitor\Command;
+namespace Mooeen\MonitorLaravel\Command;
 
 use Throwable;
 

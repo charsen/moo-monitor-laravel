@@ -18,13 +18,13 @@
  *   moo:cloud:test --resolve       推送后在云端把自检 runtime 标记为已解决（默认保留可见）
  */
 
-namespace Mooeen\Monitor\Command;
+namespace Mooeen\MonitorLaravel\Command;
 
 use Illuminate\Console\Command;
-use Mooeen\Monitor\Cloud\CloudClient;
-use Mooeen\Monitor\Cloud\HeartbeatMeta;
-use Mooeen\Monitor\Recorder\RuntimeErrorRecorder;
-use Mooeen\Monitor\Recorder\SqlSlowRecorder;
+use Mooeen\MonitorLaravel\Cloud\CloudClient;
+use Mooeen\MonitorLaravel\Cloud\HeartbeatMeta;
+use Mooeen\MonitorLaravel\Recorder\RuntimeErrorRecorder;
+use Mooeen\MonitorLaravel\Recorder\SqlSlowRecorder;
 use Throwable;
 
 class CloudTestCommand extends Command

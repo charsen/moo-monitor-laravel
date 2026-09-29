@@ -2,17 +2,17 @@
 
 declare(strict_types=1);
 
-namespace Mooeen\Monitor\Tests\Feature\Recorder;
+namespace Mooeen\MonitorLaravel\Tests\Feature\Recorder;
 
 use Illuminate\Console\Events\ScheduledBackgroundTaskFinished;
 use Illuminate\Console\Events\ScheduledTaskFailed;
 use Illuminate\Console\Events\ScheduledTaskFinished;
 use Illuminate\Console\Scheduling\Schedule;
 use Mockery;
-use Mooeen\Monitor\ExceptionDispatcher;
-use Mooeen\Monitor\Recorder\RuntimeErrorRecorder;
-use Mooeen\Monitor\ScheduledTaskExit;
-use Mooeen\Monitor\Tests\TestCase;
+use Mooeen\MonitorLaravel\ExceptionDispatcher;
+use Mooeen\MonitorLaravel\Recorder\RuntimeErrorRecorder;
+use Mooeen\MonitorLaravel\ScheduledTaskExit;
+use Mooeen\MonitorLaravel\Tests\TestCase;
 
 /**
  * P1-7① 回归锁：调度任务非零退出码采集（矩阵 #11）。

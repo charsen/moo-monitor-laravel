@@ -1,8 +1,8 @@
 <?php declare(strict_types=1);
 
 use Illuminate\Database\Events\QueryExecuted;
-use Mooeen\Monitor\Recorder\SqlSlowListener;
-use Mooeen\Monitor\Recorder\SqlSlowRecorder;
+use Mooeen\MonitorLaravel\Recorder\SqlSlowListener;
+use Mooeen\MonitorLaravel\Recorder\SqlSlowRecorder;
 
 /**
  * P2-4 回归锁：fillBindings 转义（失真 D，兼脱敏安全）。

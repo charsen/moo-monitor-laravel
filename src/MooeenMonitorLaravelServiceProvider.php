@@ -1,19 +1,19 @@
 <?php declare(strict_types=1);
 
-namespace Mooeen\Monitor;
+namespace Mooeen\MonitorLaravel;
 
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Log\Events\MessageLogged;
 use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
-use Mooeen\Monitor\Command\CloudMcpCommand;
-use Mooeen\Monitor\Command\CloudPushCommand;
-use Mooeen\Monitor\Command\CloudTestCommand;
-use Mooeen\Monitor\Command\MigrateCommand;
-use Mooeen\Monitor\Recorder\RuntimeErrorRecorder;
-use Mooeen\Monitor\Recorder\SqlSlowListener;
-use Mooeen\Monitor\Recorder\SqlSlowRecorder;
+use Mooeen\MonitorLaravel\Command\CloudMcpCommand;
+use Mooeen\MonitorLaravel\Command\CloudPushCommand;
+use Mooeen\MonitorLaravel\Command\CloudTestCommand;
+use Mooeen\MonitorLaravel\Command\MigrateCommand;
+use Mooeen\MonitorLaravel\Recorder\RuntimeErrorRecorder;
+use Mooeen\MonitorLaravel\Recorder\SqlSlowListener;
+use Mooeen\MonitorLaravel\Recorder\SqlSlowRecorder;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 use Throwable;
 
@@ -23,7 +23,7 @@ use Throwable;
  * headless 包：不注册任何路由 / 视图，查看与处置统一走云端；
  * 本地只负责「采集 → 缓冲（storage/moo-monitor）→ 推送（moo:cloud:push）」。
  */
-class MonitorProvider extends ServiceProvider
+class MooeenMonitorLaravelServiceProvider extends ServiceProvider
 {
     public const VERSION = '0.1.14';
 
@@ -148,7 +148,7 @@ class MonitorProvider extends ServiceProvider
                 $recording = true;
                 try {
                     [$file, $line] = $this->logCallSite();
-                    $synthetic     = new \Mooeen\Monitor\LoggedErrorMessage(mb_substr($message, 0, 1024), $file, $line);
+                    $synthetic     = new \Mooeen\MonitorLaravel\LoggedErrorMessage(mb_substr($message, 0, 1024), $file, $line);
                     $this->app->make(ExceptionDispatcher::class)->dispatch($synthetic, source: 'log_message', meta: [
                         'log_level'   => $event->level,
                         'log_message' => mb_substr($message, 0, 500),
@@ -319,7 +319,7 @@ class MonitorProvider extends ServiceProvider
         }
 
         // file 用合成标记（非真实源文件）：source_snippet 自然取空、所有 schedule_exit 共桶按 command 聚合。
-        $synthetic = new \Mooeen\Monitor\ScheduledTaskExit($message, 'moo-monitor/schedule', 0);
+        $synthetic = new \Mooeen\MonitorLaravel\ScheduledTaskExit($message, 'moo-monitor/schedule', 0);
         $this->app->make(ExceptionDispatcher::class)->dispatch($synthetic, source: 'schedule_exit', meta: $meta);
 
         return true;

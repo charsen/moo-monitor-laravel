@@ -2,13 +2,13 @@
 
 declare(strict_types=1);
 
-namespace Mooeen\Monitor\Tests\Feature\Cloud;
+namespace Mooeen\MonitorLaravel\Tests\Feature\Cloud;
 
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
-use Mooeen\Monitor\Cloud\CloudClient;
-use Mooeen\Monitor\Cloud\HeartbeatMeta;
-use Mooeen\Monitor\Tests\TestCase;
+use Mooeen\MonitorLaravel\Cloud\CloudClient;
+use Mooeen\MonitorLaravel\Cloud\HeartbeatMeta;
+use Mooeen\MonitorLaravel\Tests\TestCase;
 
 /**
  * CloudClient::fetchSummary —— scaffold 首页回拉云端汇总的只读拉取。

@@ -2,12 +2,12 @@
 
 declare(strict_types=1);
 
-namespace Mooeen\Monitor\Cloud;
+namespace Mooeen\MonitorLaravel\Cloud;
 
-use Mooeen\Monitor\Concerns\SafelyLogs;
-use Mooeen\Monitor\Recorder\RuntimeErrorRecorder;
-use Mooeen\Monitor\Recorder\SqlSlowRecorder;
-use Mooeen\Monitor\StorageScope;
+use Mooeen\MonitorLaravel\Concerns\SafelyLogs;
+use Mooeen\MonitorLaravel\Recorder\RuntimeErrorRecorder;
+use Mooeen\MonitorLaravel\Recorder\SqlSlowRecorder;
+use Mooeen\MonitorLaravel\StorageScope;
 use Symfony\Component\Yaml\Yaml;
 use Throwable;
 
@@ -542,7 +542,7 @@ class CloudSync
             return $relative;
         }
 
-        return \Mooeen\Monitor\Recorder\RuntimeErrorRecorder::resolveStoragePath(StorageScope::scopePath($relative));
+        return \Mooeen\MonitorLaravel\Recorder\RuntimeErrorRecorder::resolveStoragePath(StorageScope::scopePath($relative));
     }
 
     /** ISO-8601（可含毫秒）→ 浮点 epoch 秒；解析失败返 0.0。strtotime 会丢毫秒，故走 DateTimeImmutable。 */

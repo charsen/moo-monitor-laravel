@@ -1,7 +1,7 @@
 <?php declare(strict_types=1);
 
-use Mooeen\Monitor\Recorder\RuntimeErrorRecorder;
-use Mooeen\Monitor\Recorder\SqlSlowRecorder;
+use Mooeen\MonitorLaravel\Recorder\RuntimeErrorRecorder;
+use Mooeen\MonitorLaravel\Recorder\SqlSlowRecorder;
 
 /**
  * Tier-5 perf:count() 改为按桶 glob(不再 allRows() 全量 parse 每个 yaml)。

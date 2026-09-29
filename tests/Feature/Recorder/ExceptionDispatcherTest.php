@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace Mooeen\Monitor\Tests\Feature\Recorder;
+namespace Mooeen\MonitorLaravel\Tests\Feature\Recorder;
 
 use Illuminate\Log\Events\MessageLogged;
 use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Mail;
 use Mockery;
-use Mooeen\Monitor\ExceptionDispatcher;
-use Mooeen\Monitor\Recorder\RuntimeErrorRecorder;
-use Mooeen\Monitor\Tests\TestCase;
+use Mooeen\MonitorLaravel\ExceptionDispatcher;
+use Mooeen\MonitorLaravel\Recorder\RuntimeErrorRecorder;
+use Mooeen\MonitorLaravel\Tests\TestCase;
 use RuntimeException;
 
 /**

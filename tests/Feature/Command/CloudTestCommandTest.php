@@ -1,7 +1,7 @@
 <?php declare(strict_types=1);
 
 use Illuminate\Support\Facades\Http;
-use Mooeen\Monitor\Cloud\CloudClient;
+use Mooeen\MonitorLaravel\Cloud\CloudClient;
 
 /**
  * moo:cloud:test 自检命令:验证「配置检查 → 心跳 → 推 runtime → 推慢 SQL」整条管道的 wiring。

@@ -2,16 +2,16 @@
 
 declare(strict_types=1);
 
-namespace Mooeen\Monitor\Tests\Feature\HostSafety;
+namespace Mooeen\MonitorLaravel\Tests\Feature\HostSafety;
 
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Http\Request;
-use Mooeen\Monitor\Concerns\SafelyLogs;
-use Mooeen\Monitor\ExceptionDispatcher;
-use Mooeen\Monitor\Recorder\RuntimeErrorRecorder;
-use Mooeen\Monitor\Recorder\SqlSlowListener;
-use Mooeen\Monitor\Recorder\SqlSlowRecorder;
-use Mooeen\Monitor\Tests\TestCase;
+use Mooeen\MonitorLaravel\Concerns\SafelyLogs;
+use Mooeen\MonitorLaravel\ExceptionDispatcher;
+use Mooeen\MonitorLaravel\Recorder\RuntimeErrorRecorder;
+use Mooeen\MonitorLaravel\Recorder\SqlSlowListener;
+use Mooeen\MonitorLaravel\Recorder\SqlSlowRecorder;
+use Mooeen\MonitorLaravel\Tests\TestCase;
 use RuntimeException;
 
 /**

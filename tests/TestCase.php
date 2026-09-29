@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Mooeen\Monitor\Tests;
+namespace Mooeen\MonitorLaravel\Tests;
 
-use Mooeen\Monitor\MonitorProvider;
+use Mooeen\MonitorLaravel\MooeenMonitorLaravelServiceProvider;
 use Orchestra\Testbench\TestCase as Orchestra;
 
 /**
@@ -15,7 +15,7 @@ abstract class TestCase extends Orchestra
 {
     protected function getPackageProviders($app): array
     {
-        return [MonitorProvider::class];
+        return [MooeenMonitorLaravelServiceProvider::class];
     }
 
     protected function defineEnvironment($app): void

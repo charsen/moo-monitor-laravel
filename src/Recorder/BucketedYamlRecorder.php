@@ -1,10 +1,10 @@
 <?php declare(strict_types=1);
 
-namespace Mooeen\Monitor\Recorder;
+namespace Mooeen\MonitorLaravel\Recorder;
 
 use Illuminate\Http\Request;
-use Mooeen\Monitor\Concerns\SafelyLogs;
-use Mooeen\Monitor\StorageScope;
+use Mooeen\MonitorLaravel\Concerns\SafelyLogs;
+use Mooeen\MonitorLaravel\StorageScope;
 use Symfony\Component\Yaml\Yaml;
 use Throwable;
 

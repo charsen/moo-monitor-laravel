@@ -38,12 +38,12 @@
   },
   "autoload": {
     "psr-4": {
-      "Mooeen\\Monitor\\": "src"
+      "Mooeen\\MonitorLaravel\\": "src/"
     }
   },
   "autoload-dev": {
     "psr-4": {
-      "Mooeen\\Monitor\\Tests\\": "tests"
+      "Mooeen\\MonitorLaravel\\Tests\\": "tests/"
     }
   },
   "scripts": {
@@ -72,7 +72,7 @@
     },
     "laravel": {
       "providers": [
-        "Mooeen\\Monitor\\MonitorProvider"
+        "Mooeen\\MonitorLaravel\\MooeenMonitorLaravelServiceProvider"
       ]
     }
   }

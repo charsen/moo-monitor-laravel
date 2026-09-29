@@ -2,9 +2,9 @@
 
 declare(strict_types=1);
 
-namespace Mooeen\Monitor\Cloud;
+namespace Mooeen\MonitorLaravel\Cloud;
 
-use Mooeen\Monitor\MonitorProvider;
+use Mooeen\MonitorLaravel\MooeenMonitorLaravelServiceProvider;
 
 /**
  * 心跳 meta 组装：从 config 读采集 / 推送开关与环境信息，供 moo:cloud:push / moo:cloud:test 打心跳时携带。
@@ -26,7 +26,7 @@ final class HeartbeatMeta
 
         return [
             'sdk'              => 'moo-monitor-laravel',
-            'sdk_version'      => MonitorProvider::version(),
+            'sdk_version'      => MooeenMonitorLaravelServiceProvider::version(),
             'php_version'      => PHP_VERSION,
             'laravel_version'  => function_exists('app') ? (string) app()->version() : '',
             'app_env'          => (string) config('app.env', 'unknown'),

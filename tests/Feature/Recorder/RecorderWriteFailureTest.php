@@ -1,7 +1,7 @@
 <?php declare(strict_types=1);
 
-use Mooeen\Monitor\Recorder\RuntimeErrorRecorder;
-use Mooeen\Monitor\Recorder\SqlSlowRecorder;
+use Mooeen\MonitorLaravel\Recorder\RuntimeErrorRecorder;
+use Mooeen\MonitorLaravel\Recorder\SqlSlowRecorder;
 
 /**
  * 3.7.1 回归锁(异常通知移交云端后的两处修整):
