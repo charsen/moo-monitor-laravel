@@ -117,9 +117,9 @@ moo-monitor-laravel/
         "pestphp/pest": "^3.0",
         "laravel/pint": "^1.13"
     },
-    "autoload": { "psr-4": { "Mooeen\\Monitor\\": "src/" } },
+    "autoload": { "psr-4": { "Mooeen\\MonitorLaravel\\": "src/" } },
     "extra": {
-        "laravel": { "providers": ["Mooeen\\Monitor\\MonitorProvider"] }
+        "laravel": { "providers": ["Mooeen\\MonitorLaravel\\MonitorProvider"] }
     }
 }
 ```
