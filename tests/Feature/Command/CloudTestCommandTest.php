@@ -137,3 +137,24 @@ it('自检记录形状合法:runtime/slow 各字段齐全可被云端 intake 解
 
     expect(CloudClient::PATH_SLOW_QUERIES)->toBe('api/v1/slow-queries/intake');
 });
+
+it('自检只有 saved 才通过，过滤或拒收不自动 resolve', function (string $type, string $status, bool $retryable, string $reason, string $message) {
+    cloudTest_configure();
+    Http::fake(function ($request) use ($status, $retryable, $reason) {
+        if (str_ends_with($request->url(), '/heartbeat')) {
+            return Http::response(['ok' => true]);
+        }
+
+        return Http::response([
+            'ok'      => true, 'saved' => 0, 'filtered' => $status === 'filtered' ? 1 : 0, 'skipped' => $status === 'skipped' ? 1 : 0,
+            'results' => [['index' => 0, 'hash' => $request['records'][0]['hash'], 'status' => $status, 'retryable' => $retryable, 'reason' => $reason]],
+        ]);
+    });
+    $this->artisan('moo:cloud:test', ['--type' => $type, '--resolve' => true])
+        ->expectsOutputToContain($message)->assertExitCode(1);
+    Http::assertNotSent(fn ($req) => str_contains($req->url(), '/resolve'));
+})->with(['runtimes', 'slow_sql'])->with([
+    ['filtered', false, 'ingest_filter', '被 Cloud 过滤'],
+    ['skipped', true, 'upsert_failed', '等待重试'],
+    ['skipped', false, 'invalid_record', '被拒收'],
+]);

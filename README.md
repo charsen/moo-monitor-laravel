@@ -178,7 +178,7 @@ php artisan config:clear
 php artisan moo:cloud:test
 ```
 
-输出会逐项反馈：配置检查 → 心跳（连通 + 鉴权 + SDK/宿主元信息）→ 推送自检 runtime → 推送自检慢 SQL。全绿即说明「采集 → 推送 → 云端」整条管道通畅。自检记录是可识别的（runtime 类名 `SelfTestException`、SQL 带 `self-test` 标记），默认保留为「未处理」，这样你能去云端 runtimes / slow_queries 列表**亲眼确认数据已到达**；确认后在 UI 解决即可，或加 `--resolve` 让命令推送后自动标记已解决。重复运行只 upsert 同一条，不会堆积。
+输出会逐项反馈：配置检查 → 心跳（连通 + 鉴权 + SDK/宿主元信息）→ 推送自检 runtime → 推送自检慢 SQL。自检只在记录被 Cloud `saved` 时通过；`filtered`、可重试或永久 `skipped` 均会说明原因并退出 1，也不会执行 `--resolve`。这验证配置、连通与自检记录入库；真实异常/慢 SQL 的采集仍须在宿主触发验证。自检记录是可识别的（runtime 类名 `SelfTestException`、SQL 带 `self-test` 标记），默认保留为「未处理」，这样你能去云端 runtimes / slow_queries 列表**亲眼确认数据已到达**；确认后在 UI 解决即可，或加 `--resolve` 让命令推送后自动标记已解决。重复运行只 upsert 同一条，不会堆积。
 
 也可以用既有方式手动验证 —— 查看本地是否有待推送数据：
 
@@ -204,6 +204,8 @@ php artisan moo:cloud:push
 ### 推送一直失败
 
 云端会为批次中的每条记录返回处理结果。本地收到 `saved` 或 `filtered` 后立即确认该记录，后续不会重复上报；临时失败只重试对应记录，不会拖累同批其他记录。已经确认的 `resolved` 快照会在内容未发生变化时立即单文件回收。
+
+cursor / partial ack 的锁、完整写入或原子替换失败时，命令退出 1，并报告失败阶段，不进入整桶回收。先修复状态目录的权限或磁盘问题，再重试：已落盘的 ack 继续生效；ack 未落盘的项可能重发，由 Cloud 按 hash 幂等接收。
 
 `moo:cloud:push` 失败时会打印待重试记录的 hash（自动调度的后台运行则写入日志），据此定位：
 

@@ -142,3 +142,30 @@ it('旧 SCAFFOLD_CLOUD_* env 残留且新名未配 → 提示改名(不回落)',
         putenv('SCAFFOLD_CLOUD_TOKEN');
     }
 });
+
+it('状态写入失败退出 1 且不进入 prune，修复后恢复', function () {
+    config([
+        'moo-monitor.cloud.enabled'  => true,
+        'moo-monitor.cloud.base_url' => 'https://cloud.test',
+        'moo-monitor.cloud.token'    => 'moo_' . str_repeat('a1', 20),
+    ]);
+    $hash   = app(RuntimeErrorRecorder::class)->record(new RuntimeException('state persistence failure'));
+    $cursor = storage_path('moo-monitor/cloud-sync.json');
+    mkdir($cursor . '.acks.lock');
+    $unconfirmed = storage_path('moo-monitor/runtimes/resolved/abababababab.yaml');
+    $priorCursor = json_encode(['runtimes' => now()->subHour()->toIso8601String()]);
+    file_put_contents($cursor, $priorCursor);
+    // 这条旧 resolved 已在游标内：若错误进入成功回收分支，会被 prune 删除。
+    file_put_contents($unconfirmed, "hash: abababababab\nstatus: resolved\nlast_seen: '" . now()->subDay()->toIso8601String() . "'\ncount: 1\n");
+    Http::fake(function ($request) {
+        return str_ends_with($request->url(), '/heartbeat')
+            ? Http::response(['ok' => true])
+            : Http::response(['ok' => true, 'saved' => 1, 'filtered' => 0, 'skipped' => 0]);
+    });
+    $this->artisan('moo:cloud:push', ['--type' => 'runtimes'])->assertExitCode(1);
+    expect(file_get_contents($cursor))->toBe($priorCursor)
+        ->and(is_file(storage_path('moo-monitor/runtimes/open/' . $hash . '.yaml')))->toBeTrue()
+        ->and(is_file($unconfirmed))->toBeTrue();
+    rmdir($cursor . '.acks.lock');
+    $this->artisan('moo:cloud:push', ['--type' => 'runtimes'])->assertExitCode(0);
+});

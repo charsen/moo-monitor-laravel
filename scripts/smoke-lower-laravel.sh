@@ -79,12 +79,12 @@ config()->set("moo-monitor.cloud.enabled", true);
 config()->set("moo-monitor.cloud.schedule", true);
 $schedule = $app->make(Illuminate\Console\Scheduling\Schedule::class);
 $app->instance("env", "LOWER_A");
-(new Mooeen\Monitor\MonitorProvider($app))->boot();
+(new Mooeen\MonitorLaravel\MooeenMonitorLaravelServiceProvider($app))->boot();
 $events = $schedule->events();
 $a = $events[array_key_last($events)];
 $_SERVER["argv"] = ["artisan", "schedule:run", "--env=LOWER_B"];
 $app->instance("env", "LOWER_B");
-(new Mooeen\Monitor\MonitorProvider($app))->boot();
+(new Mooeen\MonitorLaravel\MooeenMonitorLaravelServiceProvider($app))->boot();
 $events = $schedule->events();
 $b = $events[array_key_last($events)];
 if (! str_contains($a->command, "--env=") || ! str_contains($a->command, "LOWER_A")
@@ -106,8 +106,8 @@ config()->set("moo-monitor.runtime.enabled", true);
 // 本段由 php -r 驱动，合成异常 trace 必然含 Command line code；关闭对应实验防噪，避免测试载体干扰。
 config()->set("moo-monitor.exception.cli_experiment_skip", false);
 $base = storage_path("framework/testing/moo-monitor-schedule-smoke");
-$recorder = new Mooeen\Monitor\Recorder\RuntimeErrorRecorder($base, ["enabled" => true]);
-$app->instance(Mooeen\Monitor\Recorder\RuntimeErrorRecorder::class, $recorder);
+$recorder = new Mooeen\MonitorLaravel\Recorder\RuntimeErrorRecorder($base, ["enabled" => true]);
+$app->instance(Mooeen\MonitorLaravel\Recorder\RuntimeErrorRecorder::class, $recorder);
 $task = $app->make(Illuminate\Console\Scheduling\Schedule::class)->exec("smoke:failed");
 $task->exitCode = 2;
 event(new Illuminate\Console\Events\ScheduledTaskFinished($task, 0.1));

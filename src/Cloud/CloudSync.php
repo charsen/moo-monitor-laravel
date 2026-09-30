@@ -121,6 +121,8 @@ class CloudSync
                 : $this->discardNoiseResult($type, ok: false, error: '无法获取 cloud 同步锁');
         }
 
+        $cloud = ['deleted' => 0];
+        $local = ['discarded' => 0, 'failed' => 0];
         try {
             $cloud = $client->discardLocalNoise($base['discard_endpoint']);
             if (! $cloud['ok']) {
@@ -136,6 +138,10 @@ class CloudSync
             return $local['failed'] > 0
                 ? $this->discardNoiseResult($type, cloudDeleted: $cloud['deleted'], localDiscarded: $local['discarded'], failed: $local['failed'], ok: false, error: "{$local['failed']} 条本地 pending 删除失败")
                 : $this->discardNoiseResult($type, cloudDeleted: $cloud['deleted'], localDiscarded: $local['discarded']);
+        } catch (SyncStateException $e) {
+            $this->safeLog('warning', 'moo-monitor: ' . $e->getMessage(), ['type' => $type]);
+
+            return $this->discardNoiseResult($type, cloudDeleted: $cloud['deleted'], localDiscarded: $local['discarded'], failed: $local['failed'], ok: false, error: $e->getMessage());
         } finally {
             @flock($lock, LOCK_UN);
             @fclose($lock);
@@ -196,6 +202,8 @@ class CloudSync
                 : $this->result($type, ok: false, error: '无法获取 cloud 同步锁');
         }
 
+        $scanned = $pushed = $rejected = $batches = 0;
+        $changed = $failedHashes = $rejectedHashes = [];
         try {
             // 全局游标覆盖连续成功水位；acks 记录「失败洞之后已经成功」的 hash/version，避免它们随失败项重复上报。
             $cursor      = $all ? null : ($this->readState()[$type] ?? null);
@@ -328,6 +336,10 @@ class CloudSync
             $this->writeAckState($type, []);
 
             return $this->result($type, scanned: $scanned, changed: count($changed), pushed: $pushed, rejected: $rejected, batches: $batches, ok: true, rejectedHashes: $rejectedHashes);
+        } catch (SyncStateException $e) {
+            $this->safeLog('warning', 'moo-monitor: ' . $e->getMessage(), ['type' => $type]);
+
+            return $this->result($type, scanned: $scanned, changed: count($changed), pushed: $pushed, rejected: $rejected, batches: $batches, ok: false, error: $e->getMessage(), failedHashes: $failedHashes, rejectedHashes: $rejectedHashes);
         } finally {
             @flock($lock, LOCK_UN);
             @fclose($lock);
@@ -571,42 +583,12 @@ class CloudSync
 
     private function writeState(string $type, string $cursor): void
     {
-        $dir = dirname($this->cursorFile);
-        if (! is_dir($dir)) {
-            @mkdir($dir, 0755, true);
-        }
-        // 与 recorder 同策略：纯 `*` 的 .gitignore 连自身一起屏蔽，目录在宿主 git status 里零噪音。
-        $gitignore = $dir . '/.gitignore';
-        if (! is_file($gitignore)) {
-            @file_put_contents($gitignore, "*\n");
-        }
-
-        // flock 串行化整个 read-modify-write：并发的两个 push（不同 --type / 重叠调度）否则会
-        // 各自读到旧 state、互相覆盖对方刚写的另一 type 游标 → 那个 type 下次全量重推。原子写只防
-        // 文件截断、不防这种 lost-update(2026-06-09 修)。
-        $lock = @fopen($this->cursorFile . '.lock', 'c');
-        if ($lock !== false) {
-            @flock($lock, LOCK_EX);
-        }
-        try {
+        $this->writeJsonState($this->cursorFile, 'cursor', function () use ($type, $cursor): array {
             $state        = $this->readState();
             $state[$type] = $cursor;
 
-            // 原子写（同 yaml 路径）：崩溃/磁盘满 mid-write 不会把 cursor json 截成坏文件 → 否则 readState
-            // 退回空、触发一次全量重推 + resolved 桶因游标=0 暂停回收（buffer bloat）。
-            $json = json_encode($state, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-            $tmp  = $this->cursorFile . '.tmp' . bin2hex(random_bytes(4));
-            if (@file_put_contents($tmp, $json) !== false) {
-                if (! @rename($tmp, $this->cursorFile)) {
-                    @unlink($tmp);
-                }
-            }
-        } finally {
-            if ($lock !== false) {
-                @flock($lock, LOCK_UN);
-                @fclose($lock);
-            }
-        }
+            return $state;
+        });
     }
 
     /** @return array<string,array<string,string>> */
@@ -623,38 +605,60 @@ class CloudSync
     /** @param array<string,string> $acks */
     private function writeAckState(string $type, array $acks): void
     {
-        $dir = dirname($this->ackFile);
-        if (! is_dir($dir)) {
-            @mkdir($dir, 0755, true);
-        }
-        $gitignore = $dir . '/.gitignore';
-        if (! is_file($gitignore)) {
-            @file_put_contents($gitignore, "*\n");
-        }
-
-        $lock = @fopen($this->ackFile . '.lock', 'c');
-        if ($lock !== false) {
-            @flock($lock, LOCK_EX);
-        }
-        try {
+        $this->writeJsonState($this->ackFile, 'partial ack', function () use ($type, $acks): array {
             $state = $this->readAckState();
             if ($acks === []) {
                 unset($state[$type]);
             } else {
                 $state[$type] = $acks;
             }
-            $json = json_encode($state, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-            $tmp  = $this->ackFile . '.tmp' . bin2hex(random_bytes(4));
-            if (@file_put_contents($tmp, $json) !== false) {
-                if (! @rename($tmp, $this->ackFile)) {
-                    @unlink($tmp);
-                }
+
+            return $state;
+        });
+    }
+
+    private function writeJsonState(string $file, string $label, callable $update): void
+    {
+        $dir = dirname($file);
+        if (! is_dir($dir)) {
+            @mkdir($dir, 0755, true);
+        }
+        // 与 recorder 同策略：纯 `*` 的 .gitignore 连自身一起屏蔽，目录在宿主 git status 里零噪音。
+        if (! is_file($dir . '/.gitignore')) {
+            @file_put_contents($dir . '/.gitignore', "*\n");
+        }
+
+        // flock 串行化整个 read-modify-write：并发的两个 push（不同 --type / 重叠调度）否则会
+        // 各自读到旧 state、互相覆盖对方刚写的另一 type 游标 → 那个 type 下次全量重推。原子写只防
+        // 文件截断、不防这种 lost-update(2026-06-09 修)。锁失败时不能继续无锁写入。
+        $lock = @fopen($file . '.lock', 'c');
+        if ($lock === false) {
+            throw new SyncStateException("无法创建 {$label} 状态锁");
+        }
+        $tmp = null;
+        try {
+            if (! @flock($lock, LOCK_EX)) {
+                throw new SyncStateException("无法获取 {$label} 状态锁");
+            }
+            $json = json_encode($update(), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            if ($json === false) {
+                throw new SyncStateException("无法编码 {$label} 状态");
+            }
+            // 原子写：崩溃/磁盘满 mid-write 不会把 cursor/ack json 截成坏文件 → 否则退回空，
+            // 触发全量重推，resolved 桶因游标=0 暂停回收（buffer bloat）。短写也必须视为失败。
+            $tmp = $file . '.tmp' . bin2hex(random_bytes(4));
+            if (@file_put_contents($tmp, $json) !== strlen($json)) {
+                throw new SyncStateException("无法完整写入 {$label} 状态，保留原状态等待重试");
+            }
+            if (! @rename($tmp, $file)) {
+                throw new SyncStateException("无法替换 {$label} 状态，保留原状态等待重试");
             }
         } finally {
-            if ($lock !== false) {
-                @flock($lock, LOCK_UN);
-                @fclose($lock);
+            if ($tmp !== null && is_file($tmp)) {
+                @unlink($tmp);
             }
+            @flock($lock, LOCK_UN);
+            @fclose($lock);
         }
     }
 

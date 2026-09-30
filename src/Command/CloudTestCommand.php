@@ -125,6 +125,9 @@ class CloudTestCommand extends Command
 
                 return false;
             }
+            if (! $this->confirmSaved($r)) {
+                return false;
+            }
             $this->info("   ✓ 已推送（saved={$r['saved']}, hash={$hash}）。");
 
             if ((bool) $this->option('resolve') && $hash !== '') {
@@ -156,6 +159,9 @@ class CloudTestCommand extends Command
 
                 return false;
             }
+            if (! $this->confirmSaved($r)) {
+                return false;
+            }
             $this->info("   ✓ 已推送（saved={$r['saved']}, hash={$hash}）。");
             $this->line('   · 慢 SQL 无解决接口，这条自检记录会留在云端（重复自检只 upsert 同一条，不堆积），可在 UI 忽略/解决。');
 
@@ -165,6 +171,23 @@ class CloudTestCommand extends Command
 
             return false;
         }
+    }
+
+    /** Transport acknowledgement alone does not prove that the self-test record was stored. */
+    private function confirmSaved(array $result): bool
+    {
+        if ($result['saved'] === 1) {
+            return true;
+        }
+        if ($result['filtered'] === 1) {
+            $this->warn('   ✗ 自检记录被 Cloud 过滤，未验证入库，请检查项目过滤规则。');
+        } else {
+            $item    = $result['results'][0] ?? [];
+            $outcome = ($item['retryable'] ?? false) ? '等待重试' : '被拒收';
+            $this->error('   ✗ 自检记录' . $outcome . '：' . ($item['reason'] ?? 'unknown'));
+        }
+
+        return false;
     }
 
     /** token 打码展示：首尾各留 4 位，中间打星，避免完整 token 出现在终端/CI 日志。 */
