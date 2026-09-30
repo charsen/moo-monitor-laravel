@@ -84,3 +84,28 @@ it('优先级真源单一：ExceptionDispatcher 与 recorder 同表', function (
     expect(RuntimeErrorRecorder::sourceRank('reportable'))->toBe(10);
     expect(RuntimeErrorRecorder::sourceRank('self_test'))->toBe(0); // 未知来源
 });
+
+it('新建、刷新和来源标记均脱敏 metadata，既有 source 与聚合 hash 不变', function () {
+    $base = sys_get_temp_dir() . '/rt_meta_' . uniqid();
+    $rec  = new RuntimeErrorRecorder($base, array_merge(config('moo-monitor.runtime'), ['enabled' => true]));
+    try {
+        $e    = new RuntimeException('stable failure');
+        $hash = $rec->record($e, null, 'queue_failed', ['log_message' => 'token=' . strrev('terces-laitini'), 'access_token' => strrev('terces-yek')]);
+        $path = $base . '/open/' . $hash . '.yaml';
+        expect(file_get_contents($path))->not->toContain(strrev('terces-laitini'))->not->toContain(strrev('terces-yek'));
+        // 模拟升级前的旧 metadata，下一次刷新须清掉，而不能原样合并回 payload。
+        $legacy                        = Yaml::parseFile($path);
+        $legacy['meta']['log_message'] = 'password=' . strrev('terces-ycagel');
+        file_put_contents($path, Yaml::dump($legacy, 10));
+        expect($rec->record($e, null, 'reportable', ['command' => 'worker --token=' . strrev('terces-hserfer')]))->toBe($hash);
+        $rec->tagSource($e, 'log_context', ['log_message' => str_repeat('x', 480) . ' token=' . str_repeat('z', 80)]);
+        $yaml = file_get_contents($path);
+        $row  = Yaml::parse($yaml);
+        expect($yaml)->not->toContain(strrev('terces-ycagel'))->not->toContain(strrev('terces-hserfer'))->not->toContain(str_repeat('z', 10))
+            ->and($row['meta']['source'])->toBe('queue_failed')
+            ->and($row['meta']['sources'])->toContain('queue_failed', 'reportable', 'log_context')
+            ->and($row['count'])->toBe(2);
+    } finally {
+        rmSrcBuckets($base);
+    }
+});

@@ -75,11 +75,46 @@ only when `skipped` is zero and `saved + filtered` equals `records.length`.
 Missing, malformed, duplicated, or inconsistent acknowledgement fields fail
 the request without advancing the cursor.
 
+Local cursor and partial acknowledgement updates require a successful lock,
+complete write, and atomic replacement. A persistence failure makes sync fail
+and prevents post-sync bulk pruning. Persisted acknowledgements remain usable
+on retry; an acknowledgement that could not be persisted may be sent again.
+
+`moo:cloud:test` requires its single record to be `saved`. A `filtered` or
+`skipped` result produces a failing exit code with the outcome and does not
+trigger runtime resolution. This does not change sync's final acknowledgement
+semantics for filtered records.
+
 ### Slow Queries
 
 `POST /api/v1/slow-queries/intake`
 
 Body and response match the runtime intake endpoint.
+
+### Cumulative Snapshots and Optional Context
+
+Runtime and slow-query records are cumulative snapshots. Cloud merges them
+under a per-record database lock: `count` and slow-query `max_ms` take the
+maximum, `first_seen` takes the earliest time, and `last_seen` the latest.
+Counts from multiple hosts are not summed.
+
+Cloud compares `meta.updated_at`, falling back to `last_seen`, and retains
+microsecond precision. A strictly older snapshot may advance cumulative
+maxima but cannot replace status, resolution metadata, exception, SQL, or
+request context. Equal timestamps or missing comparable timestamps retain
+arrival-order behavior; different contents with the same timestamp are not
+distinguished.
+
+Optional runtime `exception.previous` carries up to three exception entries
+with `class`, `message`, `file`, and `line`. Cloud sanitizes these fields on
+write and read, and exposes the chain in runtime get, AI Markdown, and the
+detail page. Optional slow-query `at.connection` is retained in Cloud and
+shown in AI Markdown and the detail summary. Omitting either optional field
+does not clear its stored value.
+
+The shared `tests/Fixtures/cloud-monitor-snapshot-contract.json` fixture
+verifies these additive fields across SDK sync, Cloud intake, and runtime
+reads.
 
 ## Local Development Noise
 
@@ -141,6 +176,9 @@ there are no new records to upload.
 ```
 
 `hash` is a 12-character lowercase hex string.
+
+The returned `runtime.exception` includes `previous`, an empty array when no
+exception chain was captured.
 
 ### Resolve Runtime
 

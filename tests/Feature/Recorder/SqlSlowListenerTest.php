@@ -203,4 +203,65 @@ class SqlSlowListenerTest extends TestCase
         $this->assertSame(1, $this->recorder->count('open'));
         Http::assertNothingSent();
     }
+
+    public function test_database_cache_queries_do_not_reenter_capture_and_host_query_succeeds(): void
+    {
+        config(['moo-monitor.sql_slow.threshold_ms' => 0, 'database.default' => 'sqlite', 'database.connections.sqlite.database' => ':memory:']);
+        app('db')->purge('sqlite');
+        // Create before switching cache so schema setup itself cannot trigger the recursion under test.
+        \Illuminate\Support\Facades\Schema::create('cache', function ($table): void {
+            $table->string('key')->primary();
+            $table->text('value');
+            $table->integer('expiration');
+        });
+        $recorder = new class($this->tmpDir . '/database-cache', ['enabled' => true, 'daily_cap' => 0]) extends SqlSlowRecorder
+        {
+            public int $calls = 0;
+
+            public function record(string $sqlRaw, string $sqlLast, float $tookMs, string $file, int $line, ?string $connection = null, ?\Illuminate\Http\Request $request = null): ?string
+            {
+                $this->calls++;
+                // Bound a broken implementation rather than allowing the test to exhaust memory.
+                if ($this->calls > 10) {
+                    return null;
+                }
+
+                return parent::record($sqlRaw, $sqlLast, $tookMs, $file, $line, $connection, $request);
+            }
+        };
+        app()->instance(SqlSlowRecorder::class, $recorder);
+        app()->forgetInstance(SqlSlowListener::class);
+        app()->instance('cache', new \Illuminate\Cache\Repository(new \Illuminate\Cache\DatabaseStore(app('db')->connection(), 'cache', 'monitor-test-')));
+
+        $result = app('db')->select('select 1 as answer');
+        $this->assertSame(1, $result[0]->answer);
+        $this->assertSame(1, $recorder->calls);
+        $this->assertCount(1, glob($this->tmpDir . '/database-cache/open/*.yaml'));
+    }
+
+    public function test_guard_is_shared_across_instances_and_released_after_failure(): void
+    {
+        $event    = $this->fakeEvent('select 1', [], 200);
+        $recorder = new class($this->tmpDir, ['enabled' => true]) extends SqlSlowRecorder
+        {
+            public int $calls = 0;
+
+            public $nested;
+
+            public function record(string $sqlRaw, string $sqlLast, float $tookMs, string $file, int $line, ?string $connection = null, ?\Illuminate\Http\Request $request = null): ?string
+            {
+                $this->calls++;
+                if ($this->calls < 4) {
+                    ($this->nested)();
+                }
+                throw new \RuntimeException('recorder unavailable');
+            }
+        };
+        $recorder->nested = fn () => (new SqlSlowListener($recorder))->handle($event);
+        (new SqlSlowListener($recorder))->handle($event);
+        (new SqlSlowListener($recorder))->handle($event);
+        $this->assertSame(2, $recorder->calls);
+        $this->listener->handle($event);
+        $this->assertSame(1, $this->recorder->count('open'));
+    }
 }

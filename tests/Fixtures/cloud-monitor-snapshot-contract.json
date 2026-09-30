@@ -1,0 +1,80 @@
+{
+  "runtime_record": {
+    "hash": "abcdef123456",
+    "status": "open",
+    "count": 4,
+    "first_seen": "2026-09-29T09:00:00+08:00",
+    "last_seen": "2026-09-30T09:00:00+08:00",
+    "meta": {
+      "updated_at": "2026-09-30T09:01:00.123456+08:00"
+    },
+    "exception": {
+      "class": "RuntimeException",
+      "code": "0",
+      "message": "outer failure",
+      "file": "app/Example.php",
+      "line": 30,
+      "previous": [
+        {
+          "class": "LogicException",
+          "message": "missing relation",
+          "file": "app/Root.php",
+          "line": 12
+        }
+      ]
+    },
+    "context": {
+      "env": "testing"
+    },
+    "request": {
+      "method": "GET",
+      "url": "https://example.test/test"
+    }
+  },
+  "slow_query_record": {
+    "hash": "fedcba654321",
+    "status": "open",
+    "count": 4,
+    "first_seen": "2026-09-29T09:00:00+08:00",
+    "last_seen": "2026-09-30T09:00:00+08:00",
+    "meta": {
+      "updated_at": "2026-09-30T09:01:00.123456+08:00"
+    },
+    "sql": {
+      "raw": "select * from examples where id = ?",
+      "last": "select * from examples where id = 1"
+    },
+    "took": {
+      "last_ms": 200,
+      "max_ms": 300,
+      "threshold_ms": 100
+    },
+    "at": {
+      "file": "app/Query.php",
+      "line": 42,
+      "connection": "reporting"
+    }
+  },
+  "runtime_read": {
+    "ok": true,
+    "runtime": {
+      "hash": "abcdef123456",
+      "exception": {
+        "class": "RuntimeException",
+        "code": "0",
+        "message": "outer failure",
+        "file": "app/Example.php",
+        "line": 30,
+        "previous": [
+          {
+            "class": "LogicException",
+            "message": "missing relation",
+            "file": "app/Root.php",
+            "line": 12
+          }
+        ]
+      },
+      "markdown": "# 运行时错误\n\n## 异常链（previous）\nLogicException: missing relation"
+    }
+  }
+}

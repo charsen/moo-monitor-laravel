@@ -22,10 +22,17 @@ class SqlSlowListener
 {
     use SafelyLogs;
 
+    /** Shared across listener instances: recorder cache/auth/log queries must not re-enter capture. */
+    private static bool $recording = false;
+
     public function __construct(private SqlSlowRecorder $recorder) {}
 
     public function handle(QueryExecuted $event): void
     {
+        if (self::$recording) {
+            return;
+        }
+        self::$recording = true;
         try {
             $config = (array) config('moo-monitor.sql_slow', []);
             if (! ($config['enabled'] ?? false)) {
@@ -61,6 +68,8 @@ class SqlSlowListener
             // 用 safeLog：日志写入本身也可能抛（database/slack 通道后端不可用），否则会逃出 handle()
             // → 逃出 Connection::logQuery() → 把一次已成功的查询变成抛异常。
             $this->safeLog('warning', 'sql-slow-listener failed: ' . $e->getMessage());
+        } finally {
+            self::$recording = false;
         }
     }
 

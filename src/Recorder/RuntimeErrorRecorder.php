@@ -331,16 +331,19 @@ class RuntimeErrorRecorder extends BucketedYamlRecorder
             [$source],
         ))));
         $clean = [];
-        foreach ($meta as $key => $value) {
+        // Refresh/tag must sanitize legacy metadata too; redact before truncating a credential.
+        foreach (array_merge($existing, $meta) as $key => $value) {
             if (! is_string($key) || $key === 'source') {
                 continue;
             }
             if (is_scalar($value) || $value === null) {
-                $clean[$key] = is_string($value) ? mb_substr($value, 0, 500) : $value;
+                $clean[$key] = $this->masker->shouldMaskKey($key)
+                    ? '***'
+                    : (is_string($value) ? mb_substr($this->masker->maskSecrets($this->masker->maskSensitiveSql($value)), 0, 500) : $value);
             }
         }
 
-        return array_filter(array_merge($existing, $clean, [
+        return array_filter(array_merge($clean, [
             // source 只升不降（P2-2）：refresh 带来的低优先级来源不得把 meta.source 降回去；
             // sources 仍收「见过的全部来源」并集。
             'source'  => $this->preferSource($source, $existingPrimary),

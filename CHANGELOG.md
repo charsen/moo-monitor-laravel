@@ -4,6 +4,27 @@
 
 ## Unreleased
 
+## [0.1.20] - 2026-09-30
+
+### Fixed
+
+- 采集钩子将容器解析、上下文读取与记录过程纳入 fail-safe 边界；采集失败不改变宿主异常处理或响应，诊断日志避免再次触发采集。
+- 慢 SQL 采集增加跨 listener 实例的重入保护，避免 database cache、认证或日志查询形成自反馈。
+- cursor / partial ack 的锁、短写及原子替换失败会明确返回失败，推送命令退出 1 且不进入整桶回收；修复后保留已落盘确认继续恢复。
+- `moo:cloud:test` 只有记录被 Cloud `saved` 才通过；过滤或拒收不再误报成功，也不会自动 resolve。
+- Runtime 来源 metadata 在新建、刷新与来源补记时先脱敏再截断，并清理刷新时遇到的历史敏感值。
+- 低版本冒烟脚本对齐当前命名空间；SDK 版本兜底常量同步为 `0.1.20`。
+
+### Contracts
+
+- 补齐与 Cloud 镜像的累计快照 fixture，验证 `exception.previous` 与 `at.connection` 经 push / MCP 保留；记录 Cloud 的并发合并、严格旧快照保护和相同时间戳兼容边界。
+- Cloud 配套版本为 `0.1.34`，包含新增可空列的增量迁移；部署与迁移另行执行。
+
+### Verified
+
+- `composer quality`：241 tests / 930 assertions；Laravel 8.83.29 定向安装 / 启动冒烟通过。
+- Cloud 配套定向验证：59 tests / 335 assertions，详情渲染 2 tests / 17 assertions，隔离 MySQL 并发 4 tests / 56 assertions。
+
 ## [0.1.19] - 2026-09-29
 
 - **破坏性：命名空间与 provider 对齐骨架约定** —— `Mooeen\Monitor\` → `Mooeen\MonitorLaravel\`，provider `MonitorProvider` → `MooeenMonitorLaravelServiceProvider`，psr-4 target 补尾斜杠。消费方需同步 `use`、provider 注册与 `extra.moo-private-packages[].provider-rel`。config stem 仍为 `moo-monitor`（刻意共享的产品 stem，登记为例外）。

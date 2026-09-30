@@ -11,6 +11,7 @@ use Mooeen\MonitorLaravel\Command\CloudMcpCommand;
 use Mooeen\MonitorLaravel\Command\CloudPushCommand;
 use Mooeen\MonitorLaravel\Command\CloudTestCommand;
 use Mooeen\MonitorLaravel\Command\MigrateCommand;
+use Mooeen\MonitorLaravel\Concerns\SafelyLogs;
 use Mooeen\MonitorLaravel\Recorder\RuntimeErrorRecorder;
 use Mooeen\MonitorLaravel\Recorder\SqlSlowListener;
 use Mooeen\MonitorLaravel\Recorder\SqlSlowRecorder;
@@ -25,7 +26,12 @@ use Throwable;
  */
 class MooeenMonitorLaravelServiceProvider extends ServiceProvider
 {
-    public const VERSION = '0.1.14';
+    use SafelyLogs;
+
+    /** @var array<string,true> */
+    private array $capturingHooks = [];
+
+    public const VERSION = '0.1.20';
 
     public static function version(): string
     {
@@ -63,7 +69,11 @@ class MooeenMonitorLaravelServiceProvider extends ServiceProvider
     {
         Event::listen(
             \Illuminate\Database\Events\QueryExecuted::class,
-            [SqlSlowListener::class, 'handle'],
+            function ($event): void {
+                $this->safelyCapture('slow_sql', function () use ($event): void {
+                    $this->app->make(SqlSlowListener::class)->handle($event);
+                });
+            },
         );
     }
 
@@ -77,7 +87,9 @@ class MooeenMonitorLaravelServiceProvider extends ServiceProvider
             $this->callAfterResolving(ExceptionHandler::class, function ($handler): void {
                 if (method_exists($handler, 'reportable')) {
                     $handler->reportable(function (Throwable $e): void {
-                        $this->app->make(ExceptionDispatcher::class)->dispatch($e, source: 'reportable');
+                        $this->safelyCapture('reportable', function () use ($e): void {
+                            $this->app->make(ExceptionDispatcher::class)->dispatch($e, source: 'reportable');
+                        });
                     });
                 }
             });
@@ -91,9 +103,11 @@ class MooeenMonitorLaravelServiceProvider extends ServiceProvider
             $this->callAfterResolving(ExceptionHandler::class, function ($handler): void {
                 if (method_exists($handler, 'renderable')) {
                     $handler->renderable(function (HttpException $e, $request) {
-                        if ($e->getStatusCode() >= 500) {
-                            $this->app->make(ExceptionDispatcher::class)->dispatch($e, source: 'http_5xx');
-                        }
+                        $this->safelyCapture('http_5xx', function () use ($e): void {
+                            if ($e->getStatusCode() >= 500) {
+                                $this->app->make(ExceptionDispatcher::class)->dispatch($e, source: 'http_5xx');
+                            }
+                        });
 
                         return null; // 关键：返回 null 放行后续渲染，绝不改变宿主对外响应
                     });
@@ -107,17 +121,22 @@ class MooeenMonitorLaravelServiceProvider extends ServiceProvider
         // 已走过 reportable，WeakMap 会自动去重。
         if ((bool) config('moo-monitor.exception.log_context_hook', true)) {
             Event::listen(MessageLogged::class, function (MessageLogged $event): void {
-                if (! in_array($event->level, $this->logHookLevels(), true)) {
-                    return;
-                }
+                $this->safelyCapture('log_context', function () use ($event): void {
+                    if (($event->context['moo_monitor_internal'] ?? false) === true) {
+                        return;
+                    }
+                    if (! in_array($event->level, $this->logHookLevels(), true)) {
+                        return;
+                    }
 
-                $exception = $event->context['exception'] ?? null;
-                if ($exception instanceof Throwable) {
-                    $this->app->make(ExceptionDispatcher::class)->dispatch($exception, source: 'log_context', meta: [
-                        'log_level'   => $event->level,
-                        'log_message' => mb_substr((string) $event->message, 0, 500),
-                    ]);
-                }
+                    $exception = $event->context['exception'] ?? null;
+                    if ($exception instanceof Throwable) {
+                        $this->app->make(ExceptionDispatcher::class)->dispatch($exception, source: 'log_context', meta: [
+                            'log_level'   => $event->level,
+                            'log_message' => (string) $event->message,
+                        ]);
+                    }
+                });
             });
         }
 
@@ -126,36 +145,38 @@ class MooeenMonitorLaravelServiceProvider extends ServiceProvider
         // 上面的 log_context 钩子全漏。这里按调用点合成一条 LoggedErrorMessage 进同一 record 管道。
         if ((bool) config('moo-monitor.exception.log_message_hook', true)) {
             Event::listen(MessageLogged::class, function (MessageLogged $event): void {
-                // 防回环（硬约束第六条）：本包 safeLog / logWriteFailure 也写 error 日志，若被本钩子
-                // 当「字符串化异常」采集会「写盘失败 → error 日志 → 采集 → 又写盘失败」死循环。双保险：
-                // ① static 重入闸（进入置 true，finally 复位）；② safeLog 打 moo_monitor_internal 标记，见标记即跳过。
                 static $recording = false;
-                if ($recording || ($event->context['moo_monitor_internal'] ?? false) === true) {
-                    return;
-                }
-                if (! in_array($event->level, $this->logHookLevels(), true)) {
-                    return;
-                }
-                // 已带真异常对象的走上面 log_context 钩子（信息量更高），这里只补「无异常对象」的字符串化形态。
-                if (($event->context['exception'] ?? null) instanceof Throwable) {
-                    return;
-                }
-                $message = trim((string) $event->message);
-                if ($message === '') {
-                    return;
-                }
+                $this->safelyCapture('log_message', function () use ($event, &$recording): void {
+                    // 防回环（硬约束第六条）：本包 safeLog / logWriteFailure 也写 error 日志，若被本钩子
+                    // 当「字符串化异常」采集会「写盘失败 → error 日志 → 采集 → 又写盘失败」死循环。双保险：
+                    // ① static 重入闸（进入置 true，finally 复位）；② safeLog 打 moo_monitor_internal 标记，见标记即跳过。
+                    if ($recording || ($event->context['moo_monitor_internal'] ?? false) === true) {
+                        return;
+                    }
+                    if (! in_array($event->level, $this->logHookLevels(), true)) {
+                        return;
+                    }
+                    // 已带真异常对象的走上面 log_context 钩子（信息量更高），这里只补「无异常对象」的字符串化形态。
+                    if (($event->context['exception'] ?? null) instanceof Throwable) {
+                        return;
+                    }
+                    $message = trim((string) $event->message);
+                    if ($message === '') {
+                        return;
+                    }
 
-                $recording = true;
-                try {
-                    [$file, $line] = $this->logCallSite();
-                    $synthetic     = new \Mooeen\MonitorLaravel\LoggedErrorMessage(mb_substr($message, 0, 1024), $file, $line);
-                    $this->app->make(ExceptionDispatcher::class)->dispatch($synthetic, source: 'log_message', meta: [
-                        'log_level'   => $event->level,
-                        'log_message' => mb_substr($message, 0, 500),
-                    ]);
-                } finally {
-                    $recording = false;
-                }
+                    $recording = true;
+                    try {
+                        [$file, $line] = $this->logCallSite();
+                        $synthetic     = new \Mooeen\MonitorLaravel\LoggedErrorMessage(mb_substr($message, 0, 1024), $file, $line);
+                        $this->app->make(ExceptionDispatcher::class)->dispatch($synthetic, source: 'log_message', meta: [
+                            'log_level'   => $event->level,
+                            'log_message' => $message,
+                        ]);
+                    } finally {
+                        $recording = false;
+                    }
+                });
             });
         }
 
@@ -163,15 +184,17 @@ class MooeenMonitorLaravelServiceProvider extends ServiceProvider
         // failed 回调，不会显式 report($e)，因此这里直接接 JobFailed，仍交给同一个 dispatcher 去重。
         if ((bool) config('moo-monitor.exception.queue_failed_hook', true)) {
             Event::listen(JobFailed::class, function (JobFailed $event): void {
-                $job  = $event->job;
-                $meta = [
-                    'connection' => $event->connectionName,
-                    'queue'      => $this->safeJobValue(fn () => $job?->getQueue()),
-                    'job_name'   => $this->safeJobValue(fn () => method_exists($job, 'resolveName') ? $job->resolveName() : (method_exists($job, 'getName') ? $job->getName() : null)),
-                    'attempts'   => $this->safeJobValue(fn () => method_exists($job, 'attempts') ? $job->attempts() : null),
-                ];
+                $this->safelyCapture('queue_failed', function () use ($event): void {
+                    $job  = $event->job;
+                    $meta = [
+                        'connection' => $event->connectionName,
+                        'queue'      => $this->safeJobValue(fn () => $job?->getQueue()),
+                        'job_name'   => $this->safeJobValue(fn () => method_exists($job, 'resolveName') ? $job->resolveName() : (method_exists($job, 'getName') ? $job->getName() : null)),
+                        'attempts'   => $this->safeJobValue(fn () => method_exists($job, 'attempts') ? $job->attempts() : null),
+                    ];
 
-                $this->app->make(ExceptionDispatcher::class)->dispatch($event->exception, source: 'queue_failed', meta: $meta);
+                    $this->app->make(ExceptionDispatcher::class)->dispatch($event->exception, source: 'queue_failed', meta: $meta);
+                });
             });
         }
 
@@ -184,16 +207,18 @@ class MooeenMonitorLaravelServiceProvider extends ServiceProvider
         $handledScheduledExits = new \WeakMap;
         if ((bool) config('moo-monitor.exception.schedule_exit_hook', true)) {
             $onScheduledFinish = function ($event) use ($handledScheduledExits): void {
-                $task = $event->task ?? null;
-                if (! is_object($task)) {
-                    return;
-                }
+                $this->safelyCapture('schedule_exit', function () use ($event, $handledScheduledExits): void {
+                    $task = $event->task ?? null;
+                    if (! is_object($task)) {
+                        return;
+                    }
 
-                // repeating event 可能复用同一 task；每次 Finished 先清掉上轮标记。
-                unset($handledScheduledExits[$task]);
-                if ($this->recordScheduledExit($event)) {
-                    $handledScheduledExits[$task] = true;
-                }
+                    // repeating event 可能复用同一 task；每次 Finished 先清掉上轮标记。
+                    unset($handledScheduledExits[$task]);
+                    if ($this->recordScheduledExit($event)) {
+                        $handledScheduledExits[$task] = true;
+                    }
+                });
             };
             Event::listen(\Illuminate\Console\Events\ScheduledTaskFinished::class, $onScheduledFinish);
             Event::listen(\Illuminate\Console\Events\ScheduledBackgroundTaskFinished::class, $onScheduledFinish);
@@ -202,21 +227,23 @@ class MooeenMonitorLaravelServiceProvider extends ServiceProvider
         // Cloud 命令非零退出合成的普通 Exception 仍必须跳过。真实 Error / RuntimeException 继续采集，
         // 否则会隐藏 CloudSync 自身代码缺陷。普通任务只有在前面已处理 Finished 时才去重。
         Event::listen(\Illuminate\Console\Events\ScheduledTaskFailed::class, function ($event) use ($handledScheduledExits): void {
-            $task      = $event->task      ?? null;
-            $exception = $event->exception ?? null;
-            if (! is_object($task) || ! $exception instanceof Throwable) {
-                return;
-            }
-            if (! $this->isFrameworkScheduledExitException($task, $exception)) {
-                return;
-            }
-            $summary = (string) $this->safeJobValue(fn () => method_exists($task, 'getSummaryForDisplay') ? $task->getSummaryForDisplay() : '');
-            if (! $this->isMonitorCloudCommand($task, $summary) && ! isset($handledScheduledExits[$task])) {
-                return;
-            }
+            $this->safelyCapture('schedule_failed', function () use ($event, $handledScheduledExits): void {
+                $task      = $event->task      ?? null;
+                $exception = $event->exception ?? null;
+                if (! is_object($task) || ! $exception instanceof Throwable) {
+                    return;
+                }
+                if (! $this->isFrameworkScheduledExitException($task, $exception)) {
+                    return;
+                }
+                $summary = (string) $this->safeJobValue(fn () => method_exists($task, 'getSummaryForDisplay') ? $task->getSummaryForDisplay() : '');
+                if (! $this->isMonitorCloudCommand($task, $summary) && ! isset($handledScheduledExits[$task])) {
+                    return;
+                }
 
-            unset($handledScheduledExits[$task]);
-            $this->app->make(ExceptionDispatcher::class)->suppress($exception);
+                unset($handledScheduledExits[$task]);
+                $this->app->make(ExceptionDispatcher::class)->suppress($exception);
+            });
         });
     }
 
@@ -273,6 +300,26 @@ class MooeenMonitorLaravelServiceProvider extends ServiceProvider
         }
     }
 
+    /** Protect the entire hook, including container resolution and context reads. */
+    private function safelyCapture(string $hook, callable $capture): void
+    {
+        if (isset($this->capturingHooks[$hook])) {
+            return;
+        }
+        $this->capturingHooks[$hook] = true;
+        try {
+            $capture();
+        } catch (Throwable $e) {
+            // Do not report this failure through the host handler: that would feed it back into capture.
+            $this->safeLog('warning', 'moo-monitor: capture hook failed', [
+                'hook'            => $hook,
+                'exception_class' => get_class($e),
+            ]);
+        } finally {
+            unset($this->capturingHooks[$hook]);
+        }
+    }
+
     private function safeJobValue(callable $reader): mixed
     {
         try {
@@ -313,7 +360,7 @@ class MooeenMonitorLaravelServiceProvider extends ServiceProvider
         // 退出码进 message：normalizeMessage 把数字归一为 N，同一 command 不同退出码聚合到同一 hash。
         $message = '调度任务退出码非零：' . mb_substr($summary, 0, 300) . ' (exit ' . $code . ')';
 
-        $meta = ['command' => mb_substr($summary, 0, 500), 'exit_code' => $code];
+        $meta = ['command' => $summary, 'exit_code' => $code];
         if (isset($event->runtime)) {
             $meta['runtime'] = round((float) $event->runtime, 2);
         }

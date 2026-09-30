@@ -657,3 +657,51 @@ it('pruneLocal:retention>0 也保留 stale open 累计锚点', function () {
         ->and(is_file($base . '/open/aaaaaaaaaaaa.yaml'))->toBeTrue()  // 累计 count 锚点不能删
         ->and(is_file($base . '/open/dddddddddddd.yaml'))->toBeTrue(); // 近期留
 });
+
+it('cursor 替换失败保留已落盘 ack，修复后不重发且清理临时文件', function () {
+    $hash = cloudSync_seedRuntime();
+    mkdir($this->cursor);
+    Http::fake(['*' => Http::response(['ok' => true, 'saved' => 1, 'filtered' => 0, 'skipped' => 0])]);
+    $sync   = new CloudSync($this->cursor);
+    $failed = $sync->sync('runtimes');
+    expect($failed['ok'])->toBeFalse()->and($failed['error'])->toContain('cursor')
+        ->and($failed['pushed'])->toBe(1)->and(glob($this->cursor . '.tmp*'))->toBe([])
+        ->and(json_decode(file_get_contents($this->cursor . '.acks'), true)['runtimes'])->toHaveKey($hash)
+        ->and(is_file(storage_path('moo-monitor/runtimes/open/' . $hash . '.yaml')))->toBeTrue();
+    rmdir($this->cursor);
+    $recovered = $sync->sync('runtimes');
+    expect($recovered['ok'])->toBeTrue()->and($recovered['changed'])->toBe(0)
+        ->and($sync->cursors())->toHaveKey('runtimes')
+        ->and(json_decode(file_get_contents($this->cursor . '.acks'), true))->toBe([]);
+    Http::assertSentCount(1);
+});
+
+it('ack 替换或锁创建失败明确失败且不推进 cursor，修复后重试', function (string $suffix, string $message) {
+    $hash = cloudSync_seedRuntime();
+    mkdir($this->cursor . $suffix);
+    Http::fake(['*' => Http::response(['ok' => true, 'saved' => 1, 'filtered' => 0, 'skipped' => 0])]);
+    $sync   = new CloudSync($this->cursor);
+    $failed = $sync->sync('runtimes');
+    expect($failed['ok'])->toBeFalse()->and($failed['error'])->toContain($message)
+        ->and($failed['pushed'])->toBe(1)->and($sync->cursors())->toBe([])
+        ->and(glob($this->cursor . '.acks.tmp*'))->toBe([])
+        ->and(is_file(storage_path('moo-monitor/runtimes/open/' . $hash . '.yaml')))->toBeTrue();
+    rmdir($this->cursor . $suffix);
+    expect($sync->sync('runtimes')['ok'])->toBeTrue();
+    Http::assertSentCount($suffix === '.lock' ? 1 : 2);
+})->with([['.acks', '无法替换 partial ack'], ['.acks.lock', '无法创建 partial ack'], ['.lock', '无法创建 cursor']]);
+
+it('清理噪音后 ack 写入失败报告实际已清理数量，修复后可恢复', function () {
+    cloudSync_seedRuntime();
+    file_put_contents($this->cursor . '.acks', json_encode(['runtimes' => ['aaaaaaaaaaaa' => now()->toIso8601String()]]));
+    mkdir($this->cursor . '.acks.lock');
+    Http::fake(['*' => Http::response(['ok' => true, 'deleted' => 3])]);
+    $sync   = new CloudSync($this->cursor);
+    $failed = $sync->discardLocalNoise('runtimes');
+    expect($failed['ok'])->toBeFalse()->and($failed['cloud_deleted'])->toBe(3)
+        ->and($failed['local_discarded'])->toBe(1)->and($failed['error'])->toContain('partial ack')
+        ->and(json_decode(file_get_contents($this->cursor . '.acks'), true)['runtimes'])->toHaveKey('aaaaaaaaaaaa');
+    rmdir($this->cursor . '.acks.lock');
+    expect($sync->discardLocalNoise('runtimes')['ok'])->toBeTrue()
+        ->and(json_decode(file_get_contents($this->cursor . '.acks'), true))->toBe([]);
+});
