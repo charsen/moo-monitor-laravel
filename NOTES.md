@@ -16,6 +16,8 @@
 
 ## 本仓约束与做法（确认过的）
 
+- 2026-11-10：按非空白单词匹配key=value会残留引号内的后续词；应将转义引号和空格视作同一凭据，并保留分隔引号。Cloud token位于POST body，307/308会重放整个body；全部CloudClient路径须关闭重定向，不能只关闭intake。Guzzle中间件定向用例验证3xx只产生原地址请求。
+
 - PHP 下限 8.0：禁 readonly、enum、foo(...) 一级可调用语法；match / 命名参数 / 构造器提升 / nullsafe / WeakMap 可用。
 - pest ^3 要 PHP ≥8.2、testbench ^10 只测 L12 —— 包声明支持 L8~L12/PHP 8.0+ 但验证面窄，下限守护靠方案 P6 的 CI Job B。
 - 源码注释是带日期的生产事故档案，重构搬家必须原样保留，严禁顺手删改。

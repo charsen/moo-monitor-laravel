@@ -104,10 +104,22 @@ final class SensitiveMasker
         // ③ key: value / key = value（键名命中 mask_keys，值打码）
         $keys = $this->maskKeys;
         if ($keys !== []) {
-            $alt  = implode('|', array_map(static fn ($k) => preg_quote($k, '/'), $keys));
-            $text = preg_replace(
-                '/([a-z0-9_.\-]*(?:' . $alt . ')[a-z0-9_.\-]*\s*["\']?\s*[:=]\s*["\']?)([^\s"\',&;]+)/i',
-                '$1***',
+            $alt = implode('|', array_map(static fn ($k) => preg_quote($k, '/'), $keys));
+            // 引号内空格与转义引号仍属于同一凭据，不能只遮住第一个词。
+            $value = <<<'REGEX'
+"(?:[^"\\\r\n]|\\.)*(?:"|$)|'(?:[^'\\\r\n]|\\.)*(?:'|$)|[^\s"',&;]+
+REGEX;
+            $text = preg_replace_callback(
+                '/([a-z0-9_.\-]*(?:' . $alt . ')[a-z0-9_.\-]*\s*["\']?\s*[:=]\s*)(' . $value . ')/i',
+                static function (array $match): string {
+                    $secret = $match[2];
+                    $quote  = $secret[0];
+                    if ($quote === '"' || $quote === "'") {
+                        return $match[1] . $quote . '***' . (strlen($secret) > 1 && substr($secret, -1) === $quote ? $quote : '');
+                    }
+
+                    return $match[1] . '***';
+                },
                 $text
             ) ?? $text;
         }

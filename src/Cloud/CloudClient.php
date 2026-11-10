@@ -98,7 +98,7 @@ class CloudClient
             // L8 宿主会 fatal。全局 retry() 只在回调抛异常（= 连接级瞬时失败，未链 ->throw() 故 HTTP
             // 错误响应不抛）时重试；耗尽后重抛 → 下方 catch(Throwable) 兜底成 ok=false。跨 L8~L12 一致。
             $resp = retry(3, fn () => Http::timeout($this->timeout)
-                ->withOptions(['verify' => $this->verify])
+                ->withOptions(['verify' => $this->verify, 'allow_redirects' => false])
                 ->acceptJson()
                 ->asJson()
                 ->post($url, ['token' => $this->token, 'records' => array_values($records)]), 200);
@@ -148,7 +148,7 @@ class CloudClient
 
         try {
             $resp = retry(2, fn () => Http::timeout($this->timeout)
-                ->withOptions(['verify' => $this->verify])
+                ->withOptions(['verify' => $this->verify, 'allow_redirects' => false])
                 ->acceptJson()
                 ->asJson()
                 ->post($url, ['token' => $this->token, 'env' => 'local']), 100);
@@ -249,7 +249,7 @@ class CloudClient
 
         try {
             $resp = retry(2, fn () => Http::timeout(max(1, min($this->timeout, 4)))
-                ->withOptions(['verify' => $this->verify])
+                ->withOptions(['verify' => $this->verify, 'allow_redirects' => false])
                 ->acceptJson()
                 ->asJson()
                 ->post($url, ['token' => $this->token, 'limit' => $limit]), 100);
@@ -289,7 +289,7 @@ class CloudClient
             // meta 由调用方（moo:cloud:push / moo:cloud:test）用 HeartbeatMeta::collect() 组装后传入 ——
             // CloudClient 保持纯传输、不读采集/推送业务 config（P2-6）。原样发送，请求体形状不变。
             $resp = retry(2, fn () => Http::timeout(max(1, min($this->timeout, 4)))
-                ->withOptions(['verify' => $this->verify])
+                ->withOptions(['verify' => $this->verify, 'allow_redirects' => false])
                 ->acceptJson()
                 ->asJson()
                 ->post($url, ['token' => $this->token, 'meta' => $meta]), 100);
@@ -412,7 +412,7 @@ class CloudClient
             // 钳下限 1s:timeout 误配成 0 时 min(0,4)=0,Guzzle 会当「无限等待」——
             // 在常驻的 moo:cloud:mcp（阻塞串行读）里足以卡死整个 server。
             $resp = retry(2, fn () => Http::timeout(max(1, min($this->timeout, 4)))
-                ->withOptions(['verify' => $this->verify])
+                ->withOptions(['verify' => $this->verify, 'allow_redirects' => false])
                 ->acceptJson()
                 ->asJson()
                 ->post($url, ['token' => $this->token] + $body), 100);

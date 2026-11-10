@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace Mooeen\MonitorLaravel\Tests\Feature\Cloud;
 
+use GuzzleHttp\Handler\MockHandler;
+use GuzzleHttp\HandlerStack;
+use GuzzleHttp\Middleware;
+use GuzzleHttp\Psr7\Response;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Mooeen\MonitorLaravel\Cloud\CloudClient;
@@ -18,6 +22,44 @@ use Mooeen\MonitorLaravel\Tests\TestCase;
  */
 class CloudClientTest extends TestCase
 {
+    public function test_real_redirect_middleware_never_replays_token_body(): void
+    {
+        $this->configureCloud();
+        $history = [];
+        $stack   = HandlerStack::create(new MockHandler([
+            new Response(307, ['Location' => 'https://other.test/collect']),
+            new Response(200, [], '{"ok":true,"saved":1,"filtered":0,"skipped":0}'),
+        ]));
+        $stack->push(Middleware::history($history));
+        Http::globalOptions(['handler' => $stack]);
+
+        $result = (new CloudClient)->send(CloudClient::PATH_RUNTIMES, [['hash' => 'aaaaaaaaaaaa']]);
+
+        $this->assertFalse($result['ok']);
+        $this->assertSame(307, $result['status']);
+        $this->assertCount(1, $history);
+        $this->assertSame('cloud.test', $history[0]['request']->getUri()->getHost());
+    }
+
+    public function test_every_cloud_operation_disables_redirects(): void
+    {
+        $this->configureCloud();
+        $seen = 0;
+        Http::fake(function ($request, $options) use (&$seen) {
+            $seen++;
+            $this->assertFalse($options['allow_redirects'] ?? true);
+
+            return Http::response([], 307, ['Location' => 'https://other.test/collect']);
+        });
+        $client = new CloudClient;
+        $this->assertFalse($client->send(CloudClient::PATH_RUNTIMES, [['hash' => 'aaaaaaaaaaaa']])['ok']);
+        $this->assertFalse($client->discardLocalNoise(CloudClient::PATH_RUNTIMES_DISCARD_LOCAL)['ok']);
+        $this->assertFalse($client->fetchSummary()['ok']);
+        $this->assertFalse($client->heartbeat());
+        $this->assertFalse($client->fetchRuntimes()['ok']);
+        $this->assertSame(5, $seen);
+    }
+
     private function configureCloud(): void
     {
         config([
