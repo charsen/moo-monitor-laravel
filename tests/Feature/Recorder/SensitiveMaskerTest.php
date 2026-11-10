@@ -2,6 +2,18 @@
 
 use Mooeen\MonitorLaravel\Recorder\SensitiveMasker;
 
+it('共享跨 SDK 假数据保持脱敏和诊断可读性', function () {
+    $fixture = json_decode(file_get_contents(__DIR__ . '/../../Fixtures/cross-sdk-redaction.json'), true, 512, JSON_THROW_ON_ERROR);
+    $masker  = new SensitiveMasker($fixture['keys']);
+    foreach ($fixture['cases'] as $case) {
+        $out = $masker->maskSecrets($case['input']);
+        foreach ($case['forbidden'] as $secret) {
+            expect($out)->not->toContain($secret);
+        }
+        expect($out)->toContain($case['keep']);
+    }
+});
+
 /**
  * P4-2 单测：SensitiveMasker 从 trait 独立成 final class 后可纯单测（构造器注入 mask_keys，无容器/config 依赖）。
  * 四类脱敏：URL query / SQL 值侧 / INSERT 列 / JWT+Bearer。
@@ -39,4 +51,17 @@ it('shouldMaskKey 子串 + 大小写不敏感；空 mask_keys 全不脱敏', fun
     $empty = new SensitiveMasker([]);
     expect($empty->shouldMaskKey('token'))->toBeFalse();
     expect($empty->maskSensitiveSql("where token = 'x'"))->toBe("where token = 'x'"); // 无 keys → 原样
+});
+
+it('完整脱敏引号和转义引号中的多词凭据', function () {
+    $m = new SensitiveMasker(['password', 'token', 'secret']);
+    foreach ([
+        'password="first second final-secret" keep=visible',
+        "db_password='first second final-secret' keep=visible",
+        '{"access_token":"first \\"second\\" final-secret"} keep=visible',
+    ] as $input) {
+        expect($m->maskSecrets($input))->not->toContain('final-secret')->toContain('keep=visible');
+    }
+    expect($m->maskSecrets('my_secret: "single-value", keep=visible'))
+        ->toBe('my_secret: "***", keep=visible');
 });

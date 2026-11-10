@@ -8,6 +8,11 @@ order: 10
 This package talks to `moo-scaffold-cloud` through JSON POST endpoints. Every
 request includes the project access `token` in the JSON body.
 
+All CloudClient operations disable HTTP redirects. A 3xx response is a failed
+operation and cannot replay its token-bearing POST body to another address.
+Configure the final API base URL directly; no cursor or acknowledgement advances
+on a redirect. This also applies to heartbeat, summary, discard and MCP requests.
+
 Common failure response:
 
 ```json
